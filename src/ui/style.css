@@ -159,6 +159,11 @@ button.primary {
   font-variant-numeric: tabular-nums;
 }
 
+#daily {
+  color: var(--good);
+}
+
+#daily.negative,
 #money.negative {
   color: var(--bad);
 }
@@ -487,5 +492,50 @@ button.primary {
   }
   #rating {
     min-width: 0;
+  }
+}
+
+/* ---- Event chips ---- */
+
+#events {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+#events .chip {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--panel-border);
+  white-space: nowrap;
+}
+
+#events .chip.fire {
+  background: #c0392b;
+  border-color: #ff6b61;
+  animation: pulse-red 1s ease-in-out infinite;
+}
+
+#events .chip.vip {
+  background: #6b5410;
+  border-color: var(--accent);
+}
+
+#events .chip.convention {
+  background: #1f5d4a;
+  border-color: #5fd47a;
+}
+
+#events .chip.blackout {
+  background: #2b2f3a;
+  border-color: #9aa6b4;
+}
+
+@keyframes pulse-red {
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 80, 60, 0.45);
   }
 }

@@ -1,4 +1,5 @@
 import { Application } from 'pixi.js';
+import { audio } from './audio/audio';
 import { deleteSave, loadGame, saveGame } from './game/save';
 import { Simulation } from './game/sim';
 import { World } from './game/world';
@@ -39,12 +40,18 @@ async function start(): Promise<void> {
   document.addEventListener('visibilitychange', () => document.hidden && save(false));
   setInterval(() => save(false), AUTOSAVE_SECONDS * 1000);
 
+  // Sound may only start after the player does something.
+  const unlock = () => audio.unlock();
+  window.addEventListener('pointerdown', unlock);
+  window.addEventListener('keydown', unlock);
+
   app.ticker.add((ticker) => {
     const seconds = Math.min(0.1, ticker.deltaMS / 1000);
     sim.update(seconds);
     controller.update(seconds);
     renderer.draw(controller.preview, controller.buildMode, seconds);
     hud.update();
+    audio.update(sim.hourOfDay, sim.sounds, sim.speed === 0);
   });
 
   // Handy for poking around in the browser console.

@@ -5,7 +5,7 @@
 
 export const BALANCE = {
   /** Money the player starts with. */
-  startMoney: 600_000,
+  startMoney: 250_000,
 
   /** Size of the building plot. */
   grid: {
@@ -13,6 +13,8 @@ export const BALANCE = {
     width: 80,
     /** Highest floor number you can build on (ground floor is 0). */
     maxFloor: 40,
+    /** Deepest basement floor (negative). */
+    minFloor: -6,
   },
 
   /** How fast the clock runs. */
@@ -28,10 +30,15 @@ export const BALANCE = {
   /** Every new piece of floor costs this much per cell. */
   floorCostPerCell: 200,
   lobbyCostPerCell: 500,
+  /** Digging out basement floors is more expensive. */
+  basementCostPerCell: 600,
+  /** Office and apartment rent goes up this much per floor above the ground (0.02 = 2%). */
+  rentBonusPerFloor: 0.02,
 
   /**
    * Room types. `stars` is the tower rating needed to unlock the room.
    * `ground` rooms may also be placed in the lobby on the ground floor.
+   * `basement` rooms may be placed below ground; `basementOnly` rooms only there.
    */
   rooms: {
     office: {
@@ -39,8 +46,10 @@ export const BALANCE = {
       cost: 40_000,
       stars: 1,
       ground: false,
-      /** Rent paid every day at midnight while rented. */
-      rentPerDay: 2_500,
+      basement: false,
+      basementOnly: false,
+      /** Rent paid every day at midnight while rented (on the first floor). */
+      rentPerDay: 5_000,
       /** People who work here. */
       people: 6,
     },
@@ -49,7 +58,9 @@ export const BALANCE = {
       cost: 55_000,
       stars: 1,
       ground: false,
-      rentPerDay: 2_000,
+      basement: false,
+      basementOnly: false,
+      rentPerDay: 4_000,
       people: 3,
     },
     shop: {
@@ -57,6 +68,8 @@ export const BALANCE = {
       cost: 70_000,
       stars: 2,
       ground: true,
+      basement: true,
+      basementOnly: false,
       /** Paid every day at midnight for staff and stock. */
       upkeepPerDay: 1_200,
       /** Earned for every customer. */
@@ -75,6 +88,8 @@ export const BALANCE = {
       cost: 110_000,
       stars: 2,
       ground: true,
+      basement: true,
+      basementOnly: false,
       upkeepPerDay: 2_500,
       incomePerVisit: 140,
       capacity: 14,
@@ -87,11 +102,29 @@ export const BALANCE = {
       cost: 30_000,
       stars: 3,
       ground: false,
-      upkeepPerDay: 200,
+      basement: false,
+      basementOnly: false,
+      upkeepPerDay: 300,
       /** Paid when a guest checks in. */
-      incomePerNight: 1_100,
+      incomePerNight: 2_200,
       /** Chance per evening that a free, reachable room gets a booking (at full mood). */
       bookingChance: 0.8,
+    },
+    metro: {
+      width: 24,
+      cost: 350_000,
+      stars: 3,
+      ground: false,
+      basement: true,
+      basementOnly: true,
+      upkeepPerDay: 4_000,
+      /** Fare share earned for every passenger who gets off here. */
+      incomePerVisit: 12,
+      /** Passengers per hour who come to shop or eat, at one star (scaled like visitors). */
+      visitorsPerHour: 30,
+      /** Minutes between trains. */
+      trainEvery: 12,
+      open: [5.5, 24],
     },
   },
 
@@ -171,6 +204,9 @@ export const BALANCE = {
     moveOutBelow: 25,
   },
 
+  /** A new tenant pays this many days of rent up front as a deposit. */
+  depositDays: 2,
+
   /** Chance per game hour that a vacant, reachable office or apartment finds a tenant. */
   rentChancePerHour: 0.35,
 
@@ -179,10 +215,10 @@ export const BALANCE = {
    * More stars unlock rooms and bring more visitors.
    */
   stars: [
-    { stars: 2, population: 60 },
-    { stars: 3, population: 200 },
-    { stars: 4, population: 450 },
-    { stars: 5, population: 900 },
+    { stars: 2, population: 80 },
+    { stars: 3, population: 250 },
+    { stars: 4, population: 600 },
+    { stars: 5, population: 1200 },
   ],
   /** Visitor multiplier per star rating (index = stars). */
   visitorBoost: [0, 1, 1, 1.5, 2, 2.6],
@@ -191,3 +227,43 @@ export const BALANCE = {
 export type RoomKind = keyof typeof BALANCE.rooms;
 export type ShaftKind = 'elevator' | 'express';
 export const ROOM_KINDS = Object.keys(BALANCE.rooms) as RoomKind[];
+
+/** Random events. Chances are per day; at most one big event runs at a time. */
+export const EVENTS = {
+  /** No events before this day. */
+  firstDay: 2,
+  vip: {
+    chance: 0.2,
+    stars: 2,
+    /** The VIP is happy when the whole trip takes at most this many minutes. */
+    goodTripMinutes: 15,
+    /** Reward per star when the visit goes well. */
+    rewardPerStar: 25_000,
+    moodEffect: 8,
+  },
+  fire: {
+    chance: 0.12,
+    stars: 2,
+    minRooms: 6,
+    /** Cost of calling the fire brigade. */
+    extinguishCost: 10_000,
+    /** Minutes until a burning room is lost. */
+    burnMinutes: 120,
+    /** Every this many minutes the fire may jump to a neighbouring room. */
+    spreadEvery: 30,
+    spreadChance: 0.35,
+  },
+  convention: {
+    chance: 0.2,
+    stars: 2,
+    /** Visitor multiplier during the convention. */
+    boost: 2.2,
+    hours: [8, 20],
+  },
+  blackout: {
+    chance: 0.08,
+    stars: 1,
+    minutes: 60,
+  },
+} as const;
+

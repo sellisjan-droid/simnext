@@ -3,7 +3,7 @@ import { BALANCE } from '../config/balance';
 import { Simulation, type SimTexts } from './sim';
 import { World } from './world';
 
-const texts: SimTexts = { movedIn: () => 'in', movedOut: () => 'out', dayReport: () => 'day', newStar: (s) => `star ${s}` };
+const texts: SimTexts = { movedIn: () => 'in', movedOut: () => 'out', dayReport: () => 'day', newStar: (s) => `star ${s}`, event: (m) => m.type };
 
 /** Deterministic random numbers so tests are repeatable. */
 function seeded(seed = 1): () => number {
@@ -139,7 +139,7 @@ describe('Simulation', () => {
     sim.moveIn(office);
     const before = w.money;
     while (sim.day === 1) sim.step(0.25);
-    const expected = BALANCE.rooms.office.rentPerDay - BALANCE.transport.elevator.upkeepPerDay;
+    const expected = sim.rentOf(office) - BALANCE.transport.elevator.upkeepPerDay;
     expect(w.money - before).toBe(expected);
   });
 
@@ -225,4 +225,78 @@ describe('Simulation', () => {
     run(sim2, 24 * 60);
     expect(w2.money).toBeGreaterThan(0);
   });
+
+  it('pays more rent on higher floors', () => {
+    const { w, office } = smallTower();
+    const sim = new Simulation(w, texts, seeded(1));
+    expect(sim.rentOf(office)).toBeGreaterThan(BALANCE.rooms.office.rentPerDay);
+  });
 });
+
+describe('Basements and metro', () => {
+  it('digs basements under built cells only', () => {
+    const w = new World(40, 10, 10_000_000, -3);
+    expect(w.planStrip('floor', -1, 0, 5).reason).toBe('noSupport');
+    w.buildStrip('lobby', 0, 0, 39);
+    expect(w.buildStrip('floor', -1, 0, 39).ok).toBe(true);
+    expect(w.planStrip('floor', -3, 0, 5).reason).toBe('noSupport');
+    expect(w.planRoom('office', -1, 0).reason).toBe('notInBasement');
+    expect(w.planRoom('metro', 1, 0).reason).toBe('basementOnly');
+    expect(w.planRoom('metro', -1, 2).ok).toBe(true);
+    expect(w.demolish(0, 3).reason).toBe('somethingBelow');
+    // Elevators can go down too.
+    expect(w.buildShaft('elevator', 0, 20, -1).ok).toBe(true);
+    const copy = World.fromData(JSON.parse(JSON.stringify(w.toData())));
+    expect(copy.hasBase(-1, 5)).toBe(true);
+  });
+
+  it('brings metro passengers to the shops', () => {
+    const w = new World(60, 10, 100_000_000, -3);
+    w.buildStrip('lobby', 0, 0, 59);
+    w.buildStrip('floor', -1, 0, 59);
+    const metro = w.buildRoom('metro', -1, 2)!;
+    w.buildStairs(-1, 40);
+    w.buildRoom('shop', 0, 10);
+    const sim = new Simulation(w, texts, seeded(5));
+    sim.stars = 3;
+    let fromMetro = 0;
+    for (let i = 0; i < (6 * 60) / 0.25; i++) {
+      sim.step(0.25);
+      for (const p of sim.people.values()) if (p.kind === 'visitor' && p.floor === -1 && p.state === 'walking') fromMetro++;
+    }
+    expect(metro.earnedToday).toBeGreaterThan(0);
+    expect(fromMetro).toBeGreaterThan(0);
+  });
+});
+
+describe('Events', () => {
+  it('fire spreads unless put out, and the brigade puts it out', () => {
+    const w = new World(60, 10, 100_000_000);
+    w.buildStrip('lobby', 0, 0, 59);
+    w.buildStrip('floor', 1, 0, 59);
+    const a = w.buildRoom('office', 1, 0)!;
+    w.buildRoom('office', 1, 9);
+    const sim = new Simulation(w, texts, seeded(3));
+    sim.startFire(a);
+    run(sim, 30);
+    const money = w.money;
+    expect(sim.extinguish(a)).toBe(true);
+    expect(a.fire).toBe(0);
+    expect(w.money).toBeLessThan(money);
+    sim.startFire(a);
+    run(sim, 200);
+    expect(w.rooms.has(a.id)).toBe(false); // burnt down
+  });
+
+  it('stops elevators during a blackout and runs events over many days', () => {
+    const { w, office } = smallTower(100_000_000);
+    w.buildRoom('restaurant', 0, 0);
+    const sim = new Simulation(w, texts, seeded(8));
+    sim.stars = 3;
+    sim.moveIn(office);
+    run(sim, 20 * 24 * 60);
+    const kinds = new Set(sim.messages.map((m) => m.text));
+    expect([...kinds].some((t) => ['conventionStart', 'vipComing', 'blackoutStart', 'fireStart'].includes(t))).toBe(true);
+  });
+});
+
