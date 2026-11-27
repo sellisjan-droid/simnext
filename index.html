@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SimNext</title>
+    <link rel="stylesheet" href="/src/ui/style.css" />
+  </head>
+  <body>
+    <div id="game"></div>
+
+    <header id="topbar">
+      <div class="title">SimNext</div>
+      <div class="stat"><span class="label">Geld</span><span id="money"></span></div>
+      <div class="stat"><span class="label">Tijd</span><span id="clock"></span></div>
+      <div class="stat"><span class="label">Mensen</span><span id="population"></span></div>
+      <div class="stat"><span class="label">Netto per dag</span><span id="income"></span></div>
+      <div id="speed"></div>
+      <button id="help-btn" title="Uitleg">?</button>
+    </header>
+
+    <div id="messages"></div>
+
+    <footer id="toolbar">
+      <div id="tools"></div>
+      <div id="hint"></div>
+    </footer>
+
+    <div id="tooltip" hidden></div>
+
+    <div id="help" hidden>
+      <div class="panel">
+        <h2>Welkom bij SimNext</h2>
+        <p>Bouw een toren, verhuur ruimtes en houd je huurders tevreden.</p>
+        <ol>
+          <li><b>Lobby</b>: sleep over de begane grond. Hier komen alle mensen binnen.</li>
+          <li><b>Lift</b>: sleep vanaf de lobby omhoog. Zonder lift komt niemand boven.</li>
+          <li><b>Kantoor</b> of <b>Appartement</b>: klik op een verdieping naast de lift. Er moet iets onder zitten.</li>
+          <li>Lege ruimtes met een rood bordje zijn <b>te huur</b>. Als ze via de lift bereikbaar zijn, komt er vanzelf een huurder.</li>
+          <li>Om middernacht krijg je <b>huur</b> en betaal je liftonderhoud.</li>
+          <li>Moeten mensen lang op de lift wachten, dan daalt hun tevredenheid (het bolletje rechtsboven in een ruimte). Rood betekent dat de huurder gaat vertrekken.</li>
+        </ol>
+        <p class="keys">
+          Rondkijken: rechtermuisknop slepen, pijltjestoetsen of scrollen. Zoomen: Ctrl + scrollen of + en −.<br />
+          Gereedschap: toetsen 1 t/m 7. Pauze: spatiebalk. Esc: terug naar Bekijken.
+        </p>
+        <button id="help-close">Aan de slag</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

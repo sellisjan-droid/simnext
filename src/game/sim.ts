@@ -64,6 +64,8 @@ export class Simulation {
   readonly world: World;
   readonly people = new Map<number, Person>();
   readonly messages: GameMessage[] = [];
+  /** Total messages ever sent, so the UI can tell which ones are new. */
+  messageCount = 0;
   minutes: number;
   /** Speed multiplier, 0 means paused. */
   speed = 1;
@@ -125,6 +127,7 @@ export class Simulation {
 
   private say(text: string, kind: GameMessage['kind'] = 'info'): void {
     this.messages.push({ text, time: this.minutes, kind });
+    this.messageCount++;
     if (this.messages.length > 50) this.messages.shift();
   }
 
@@ -169,7 +172,10 @@ export class Simulation {
       this.planDay(p, Math.floor(this.minutes / DAY) * DAY);
       // New tenants show up soon, as long as it fits their day.
       const arriveNow = room.kind === 'apartment' || (hour >= s.officeArrive[0] && hour < s.officeLeave[0] - 1);
-      if (arriveNow) p.todo.unshift({ at: this.minutes + this.rand(5, 60), goIn: true });
+      if (arriveNow) {
+        p.todo.push({ at: this.minutes + this.rand(5, 60), goIn: true });
+        p.todo.sort((a, b) => a.at - b.at);
+      }
     }
     this.say(this.texts.movedIn(room.kind, room.floor), 'good');
   }
@@ -228,9 +234,14 @@ export class Simulation {
 
   private stepPerson(p: Person, dt: number): void {
     if (p.todo.length && p.todo[0].at <= this.minutes) {
-      const t = p.todo.shift()!;
-      if (t.goIn && p.state === 'away') this.startTrip(p, true);
-      else if (!t.goIn && p.state === 'inside') this.startTrip(p, false);
+      const t = p.todo[0];
+      const travelling = p.state === 'walking' || p.state === 'waiting' || p.state === 'riding';
+      // While someone is still on their way, the next plan waits until they arrive.
+      if (!travelling) {
+        p.todo.shift();
+        if (t.goIn && p.state === 'away') this.startTrip(p, true);
+        else if (!t.goIn && p.state === 'inside') this.startTrip(p, false);
+      }
     }
     if (p.state === 'walking') {
       const leg = p.legs[0];
@@ -249,7 +260,9 @@ export class Simulation {
   private startTrip(p: Person, goingIn: boolean): void {
     const room = this.world.rooms.get(p.roomId);
     if (!room) return;
-    const shaft = this.world.shaftForRoom(room);
+    // Pick the elevator with the best mix of short walk and short queue.
+    const score = (s: Shaft) => Math.abs(this.world.shaftCenter(s) - this.world.roomCenter(room)) + 4 * s.waiting.length;
+    const shaft = this.world.shaftsForRoom(room).sort((a, b) => score(a) - score(b))[0];
     if (!shaft) {
       this.adjustMood(p, -BALANCE.mood.noRoutePenalty);
       return;

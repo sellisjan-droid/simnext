@@ -5,7 +5,7 @@
 
 export const BALANCE = {
   /** Money the player starts with. */
-  startMoney: 250_000,
+  startMoney: 500_000,
 
   /** Size of the building plot. */
   grid: {
@@ -26,8 +26,8 @@ export const BALANCE = {
   },
 
   /** Every new piece of floor (lobby or regular) costs this much per cell. */
-  floorCostPerCell: 500,
-  lobbyCostPerCell: 1_000,
+  floorCostPerCell: 200,
+  lobbyCostPerCell: 500,
 
   rooms: {
     office: {

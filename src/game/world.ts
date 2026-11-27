@@ -367,22 +367,22 @@ export class World {
     return best;
   }
 
-  /** The elevator people use to go between the lobby and a room, if any. */
-  shaftForRoom(room: Room): Shaft | undefined {
+  /** All elevators that connect the lobby with a room, nearest first. */
+  shaftsForRoom(room: Room): Shaft[] {
     const cx = this.roomCenter(room);
-    let best: Shaft | undefined;
-    let bestDist = Infinity;
+    const list: Shaft[] = [];
     for (const s of this.shafts.values()) {
       if (s.bottom > 0 || s.top < room.floor) continue;
-      const sx = this.shaftCenter(s);
-      if (!this.canWalk(room.floor, sx, cx)) continue;
-      const d = Math.abs(sx - cx);
-      if (d < bestDist) {
-        best = s;
-        bestDist = d;
-      }
+      if (!this.canWalk(room.floor, this.shaftCenter(s), cx)) continue;
+      list.push(s);
     }
-    return best;
+    const dist = (s: Shaft) => Math.abs(this.shaftCenter(s) - cx);
+    return list.sort((a, b) => dist(a) - dist(b));
+  }
+
+  /** The nearest elevator between the lobby and a room, if any. */
+  shaftForRoom(room: Room): Shaft | undefined {
+    return this.shaftsForRoom(room)[0];
   }
 
   /** Left and right end (exclusive right) of the connected strip of floor around x. */
