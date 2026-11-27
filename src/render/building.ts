@@ -43,7 +43,7 @@ const C = {
 export function drawBuilding(g: Graphics, w: World): void {
   g.clear();
   drawGround(g, w);
-  for (let f = 0; f <= w.maxFloor; f++) drawFloorRuns(g, w, f);
+  for (const f of w.floors()) drawFloorRuns(g, w, f);
   for (const room of w.rooms.values()) drawRoom(g, room);
   for (const s of w.stairs.values()) drawStairs(g, s);
   for (const s of w.shafts.values()) drawShaft(g, s);
@@ -123,9 +123,26 @@ function drawFloorRuns(g: Graphics, w: World, f: number): void {
     let end = x;
     while (end < w.width && w.cells[f][end].base === base) end++;
     if (base === 'lobby') drawLobby(g, w, x, end);
+    else if (f < 0) drawBasementFloor(g, f, x, end);
     else drawEmptyFloor(g, f, x, end);
     x = end;
   }
+}
+
+function drawBasementFloor(g: Graphics, f: number, x0: number, x1: number): void {
+  const y = floorTop(f);
+  const px = x0 * CELL_W;
+  const pw = (x1 - x0) * CELL_W;
+  g.rect(px, y, pw, FLOOR_H).fill(0x6e6a64);
+  g.rect(px, y, pw, 4).fill(0x57534d);
+  // Pipes along the ceiling and concrete pillars.
+  g.rect(px, y + 6, pw, 3).fill(0x8a7f70);
+  g.rect(px, y + 11, pw, 2).fill(0x4f7a8a);
+  for (let c = Math.ceil(x0 / 5) * 5; c < x1; c += 5) {
+    g.rect(c * CELL_W - 4, y + 4, 8, FLOOR_H - 4).fill(0x5d5953);
+    g.rect(c * CELL_W - 1, y + 16, 2, 3).fill(0xe0c040);
+  }
+  g.rect(px, y + FLOOR_H - SLAB, pw, SLAB).fill(0x3e3b37);
 }
 
 function drawEmptyFloor(g: Graphics, f: number, x0: number, x1: number): void {
@@ -205,6 +222,9 @@ function drawRoom(g: Graphics, room: Room): void {
     case 'hotel':
       drawHotel(g, px, y, pw, surf, r);
       break;
+    case 'metro':
+      drawMetro(g, px, y, pw, surf);
+      break;
   }
   g.rect(px, y + FLOOR_H - SLAB, pw, SLAB).fill(C.slab);
   // Thin dividing walls.
@@ -231,6 +251,8 @@ export function roomSpots(room: Room): number[] {
     }
     case 'hotel':
       return [60, 76];
+    case 'metro':
+      return Array.from({ length: 10 }, (_, i) => 30 + i * 32);
   }
 }
 
@@ -382,6 +404,35 @@ function drawHotel(g: Graphics, px: number, y: number, pw: number, surf: number,
   g.rect(px + pw - 8, surf - 16, 5, 6).fill(0xf6e3a1);
 }
 
+function drawMetro(g: Graphics, px: number, y: number, pw: number, surf: number): void {
+  // White tiled wall with a coloured band, a track bed at the back, and the platform in front.
+  g.rect(px, y, pw, FLOOR_H).fill(0xe9edf0);
+  for (let ty = y + 4; ty < surf - 14; ty += 5) g.rect(px, ty, pw, 0.6).fill(0xc9d0d6);
+  for (let tx = px; tx < px + pw; tx += 8) g.rect(tx, y + 4, 0.6, surf - 18 - y).fill(0xc9d0d6);
+  g.rect(px, y + 9, pw, 4).fill(0x2a6fdb);
+  g.rect(px, y, pw, 4).fill(0x9aa4ad);
+  // Station signs.
+  for (let sx = px + 40; sx < px + pw - 30; sx += 120) {
+    g.circle(sx, y + 11, 6).fill(0xffffff).stroke({ width: 2, color: 0xd23c3c });
+    g.rect(sx - 4, y + 10, 8, 2.5).fill(0x2a6fdb);
+  }
+  // Track bed and rails.
+  g.rect(px, surf - 14, pw, 10).fill(0x3a3633);
+  g.rect(px, surf - 6, pw, 1.5).fill(0xb0b0b0);
+  for (let tx = px + 2; tx < px + pw; tx += 7) g.rect(tx, surf - 5, 4, 1).fill(0x6b5a48);
+  // Platform edge.
+  g.rect(px, surf - 4, pw, 4).fill(0x9a9a96);
+  g.rect(px, surf - 4, pw, 1.2).fill(0xf2d230);
+  // Benches and a ticket machine.
+  for (let bx = px + 70; bx < px + pw - 40; bx += 110) {
+    g.rect(bx, surf - 22, 18, 2).fill(0x8a5a2b);
+    g.rect(bx + 1, surf - 20, 1.5, 6).fill(0x555);
+    g.rect(bx + 15, surf - 20, 1.5, 6).fill(0x555);
+  }
+  g.rect(px + 8, surf - 32, 12, 18).fill(0x2a6fdb);
+  g.rect(px + 10, surf - 29, 8, 5).fill(0x9fe0ff);
+}
+
 // ---- Stairs and elevators -------------------------------------------------
 
 function drawStairs(g: Graphics, s: Stairs): void {
@@ -431,14 +482,16 @@ function drawShaft(g: Graphics, s: Shaft): void {
 
 /** Outer walls and roof edges, so the tower reads as one building. */
 function drawFacade(g: Graphics, w: World): void {
-  for (let f = 0; f <= w.maxFloor; f++) {
+  for (const f of w.floors()) {
     const y = floorTop(f);
+    const wall = f < 0 ? 0x4a4540 : C.facade;
     for (let x = 0; x < w.width; x++) {
       if (!w.hasBase(f, x)) continue;
       const px = x * CELL_W;
-      if (!w.hasBase(f, x - 1)) g.rect(px - 3, y, 3, FLOOR_H).fill(C.facade);
-      if (!w.hasBase(f, x + 1)) g.rect(px + CELL_W, y, 3, FLOOR_H).fill(C.facade);
-      if (!w.hasBase(f + 1, x) && !w.shaftAt(f, x)) {
+      if (!w.hasBase(f, x - 1)) g.rect(px - 3, y, 3, FLOOR_H).fill(wall);
+      if (!w.hasBase(f, x + 1)) g.rect(px + CELL_W, y, 3, FLOOR_H).fill(wall);
+      if (f < 0 && !w.hasBase(f - 1, x)) g.rect(px, y + FLOOR_H, CELL_W, 3).fill(wall);
+      if (f >= 0 && !w.hasBase(f + 1, x) && !w.shaftAt(f, x)) {
         const l = !w.hasBase(f, x - 1) ? 3 : 0;
         const r = !w.hasBase(f, x + 1) ? 3 : 0;
         g.rect(px - l, y - 5, CELL_W + l + r, 5).fill(C.parapet);

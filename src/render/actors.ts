@@ -110,7 +110,7 @@ export class Actors {
 
     // Night shade over unlit parts of the building.
     if (dark > 0.02) {
-      for (let f = 0; f <= w.maxFloor; f++) {
+      for (const f of w.floors()) {
         const y = floorTop(f);
         if (y + FLOOR_H < view.y0 || y > view.y1) continue;
         let x = 0;
@@ -145,7 +145,9 @@ export class Actors {
       const people = inside.get(room.id) ?? [];
       const venue = room.kind === 'shop' || room.kind === 'restaurant';
       const open = venue && isOpen(room, hour);
-      const lit = venue ? open : people.length > 0 && !(sleeping && room.kind !== 'office');
+      const metroOpen = room.kind === 'metro' && hour >= BALANCE.rooms.metro.open[0] && hour < BALANCE.rooms.metro.open[1];
+      const lit = room.fire > 0 || (room.kind === 'metro' ? metroOpen : venue ? open : people.length > 0 && !(sleeping && room.kind !== 'office'));
+      if (room.kind === 'metro') this.drawTrain(g, room, metroOpen);
       if (dark > 0.02) {
         if (lit) {
           g.rect(px, y, pw, FLOOR_H - SLAB).fill({ color: 0xffc860, alpha: dark * 0.14 });
@@ -154,12 +156,14 @@ export class Actors {
           g.rect(px, y, pw, FLOOR_H - SLAB).fill({ color: 0x050816, alpha: dark * 0.78 });
         }
       }
-      if (!lit && !venue && room.kind !== 'hotel' && !room.rented) {
+      if (sim.blackout && room.fire === 0) g.rect(px, y, pw, FLOOR_H - SLAB).fill({ color: 0x050816, alpha: 0.3 });
+      if (!lit && !venue && room.kind !== 'hotel' && room.kind !== 'metro' && !room.rented) {
         g.rect(px, y, pw, FLOOR_H - SLAB).fill({ color: 0x1a1f2b, alpha: 0.28 });
       }
 
       // People inside.
       if (!(sleeping && room.kind !== 'office')) this.drawInside(g, room, people);
+      if (room.fire > 0) this.drawFire(g, room);
 
       // Mood light (green, orange, red) for rooms with tenants or customers.
       if (room.rented || venue) {
@@ -187,6 +191,7 @@ export class Actors {
         if (!inView(x - 10, feet - 20, 20, 20)) continue;
         const phase = p.x * 2.4;
         drawPerson(g, x, feet, p.look, p.facing, p.state === 'walking' ? 'walk' : 'stand', phase);
+        if (p.kind === 'vip') this.drawSparkle(g, x, feet - 20);
       } else if (p.state === 'climbing') {
         const leg = p.legs[0];
         if (leg?.type !== 'stairs') continue;
@@ -272,6 +277,69 @@ export class Actors {
     });
   }
 
+  /** Flames, smoke and a red glow over a burning room. */
+  private drawFire(g: Graphics, room: Room): void {
+    const px = room.x * CELL_W;
+    const y = floorTop(room.floor);
+    const pw = room.width * CELL_W;
+    const surf = floorSurface(room.floor);
+    const t = this.time;
+    const pulse = 0.25 + 0.12 * Math.sin(t * 9);
+    g.rect(px, y, pw, FLOOR_H - SLAB).fill({ color: 0xff3b10, alpha: pulse });
+    const grow = Math.min(1, room.fire / 40);
+    for (let fx = px + 6; fx < px + pw - 4; fx += 11) {
+      const h = (14 + 14 * grow) * (0.75 + 0.25 * Math.sin(t * 11 + fx * 0.7));
+      const sway = Math.sin(t * 7 + fx) * 2.5;
+      g.poly([fx - 6, surf, fx + 6, surf, fx + sway, surf - h]).fill({ color: 0xff6a00, alpha: 0.9 });
+      g.poly([fx - 3.5, surf, fx + 3.5, surf, fx + sway * 0.6, surf - h * 0.62]).fill({ color: 0xffd23f, alpha: 0.95 });
+    }
+    // Smoke rising out of the room.
+    for (let i = 0; i < 6; i++) {
+      const k = (t * 0.6 + i / 6) % 1;
+      const sx = px + pw * ((i * 0.37) % 1) + Math.sin(t + i) * 6;
+      g.circle(sx, y + 6 - k * 40, 5 + k * 9).fill({ color: 0x3a3a3a, alpha: 0.45 * (1 - k) });
+    }
+  }
+
+  private drawSparkle(g: Graphics, x: number, y: number): void {
+    const a = 0.6 + 0.4 * Math.sin(this.time * 6);
+    const r = 3.5;
+    g.poly([x, y - r, x + 1, y - 1, x + r, y, x + 1, y + 1, x, y + r, x - 1, y + 1, x - r, y, x - 1, y - 1]).fill({ color: 0xffe066, alpha: a });
+  }
+
+  /** A metro train that rolls in, waits and leaves again. */
+  private drawTrain(g: Graphics, room: Room, running: boolean): void {
+    if (!running) return;
+    const since = this.sim.minutesSinceTrain;
+    const px = room.x * CELL_W;
+    const pw = room.width * CELL_W;
+    const surf = floorSurface(room.floor);
+    let offset: number;
+    if (since < 1.2) offset = pw * Math.pow(1 - since / 1.2, 2);
+    else if (since < 4) offset = 0;
+    else if (since < 5.2) offset = -pw * Math.pow((since - 4) / 1.2, 2);
+    else return;
+    const top = surf - 32;
+    const clip = (x: number, w: number): [number, number] | null => {
+      const a = Math.max(px, x);
+      const b = Math.min(px + pw, x + w);
+      return b > a ? [a, b - a] : null;
+    };
+    const carW = 92;
+    for (let c = 0; c < Math.ceil(pw / carW); c++) {
+      const cx = px + offset + c * carW + 2;
+      const body = clip(cx, carW - 4);
+      if (!body) continue;
+      g.rect(body[0], top, body[1], 24).fill(0xf4f6f8);
+      g.rect(body[0], top + 15, body[1], 4).fill(0x2a6fdb);
+      g.rect(body[0], top + 22, body[1], 2).fill(0x555c66);
+      for (let wx = cx + 8; wx < cx + carW - 14; wx += 14) {
+        const win = clip(wx, 9);
+        if (win) g.rect(win[0], top + 4, win[1], 8).fill(since >= 1.2 && since < 4 ? 0xfff1c9 : 0x6fa8dc);
+      }
+    }
+  }
+
   private signFor(room: Room, label: string | null): void {
     let t = this.signs.get(room.id);
     if (!label) {
@@ -310,6 +378,9 @@ export class Actors {
       const len = c.long ? 56 : 34;
       const laneY = c.dir > 0 ? 27 : 43;
       if (c.x + len < view.x0 || c.x - len > view.x1) continue;
+      // Cars disappear where the street is cut away for a basement.
+      const cellX = Math.floor(c.x / CELL_W);
+      if (this.sim.world.hasBase(-1, cellX) || this.sim.world.hasBase(-1, cellX - 2) || this.sim.world.hasBase(-1, cellX + 2)) continue;
       const x = c.x - len / 2;
       g.rect(x, laneY - 10, len, 8).fill(c.long ? 0xf2c14e : c.color);
       if (c.long) g.rect(x + 3, laneY - 15, len - 6, 6).fill(0xf2c14e);

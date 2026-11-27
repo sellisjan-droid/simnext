@@ -72,7 +72,8 @@ export class Renderer {
       // Show the edges of the building plot while building.
       const top = floorTop(w.maxFloor);
       const plotW = w.width * CELL_W;
-      for (let y = top; y < 0; y += 12) {
+      const bottom = floorTop(w.minFloor - 1);
+      for (let y = top; y < bottom; y += 12) {
         g.rect(-1, y, 2, 6).fill({ color: 0xffffff, alpha: 0.35 });
         g.rect(plotW - 1, y, 2, 6).fill({ color: 0xffffff, alpha: 0.35 });
       }
