@@ -1,13 +1,14 @@
-import { BALANCE } from '../config/balance';
+import { BALANCE, type RoomKind } from '../config/balance';
 import type { Simulation } from '../game/sim';
 import type { Plan } from '../game/world';
 import { CELL_W, FLOOR_H, type Preview, type Renderer } from '../render/renderer';
-import { TOOLS, type Hud, type Tool } from './hud';
+import { TOOL_KEYS, toolStars, type Hud, type Tool } from './hud';
 import { floorName, money, moodLabel, REASONS, ROOM_NAMES } from './strings';
 
-const MIN_ZOOM = 0.5;
+const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 3;
-const KEY_PAN_SPEED = 700; // screen pixels per second
+const KEY_PAN_SPEED = 800; // screen pixels per second
+const ROOM_TOOLS: Tool[] = ['office', 'apartment', 'shop', 'restaurant', 'hotel'];
 
 /** Turns mouse and keyboard input into camera moves and build actions. */
 export class Controller {
@@ -45,18 +46,29 @@ export class Controller {
     window.addEventListener('blur', () => this.keys.clear());
   }
 
+  get buildMode(): boolean {
+    return this.tool !== 'inspect';
+  }
+
   setTool(tool: Tool): void {
+    if (this.hud.isLocked(tool)) {
+      this.hud.toast(`${'★'.repeat(toolStars(tool))} nodig om dit te bouwen`, 'bad');
+      return;
+    }
     this.tool = tool;
     this.drag = null;
     this.hud.setTool(tool);
     this.refreshHover();
   }
 
-  /** Fit the plot to the screen with the ground near the bottom. */
+  /** Frame the tower (or the empty plot) with the ground near the bottom. */
   resetCamera(): void {
     const cam = this.renderer.camera;
-    const plotW = this.sim.world.width * CELL_W;
-    const zoom = Math.max(1, Math.min(2.2, (window.innerWidth * 0.92) / plotW));
+    const w = this.sim.world;
+    const plotW = w.width * CELL_W;
+    const top = Math.max(4, w.topFloor() + 2);
+    const usableH = window.innerHeight - 260;
+    const zoom = Math.max(0.5, Math.min(2, (window.innerWidth * 0.95) / plotW, usableH / (top * FLOOR_H)));
     cam.scale.set(zoom);
     cam.x = (window.innerWidth - plotW * zoom) / 2;
     cam.y = window.innerHeight - 150;
@@ -71,13 +83,9 @@ export class Controller {
     if (this.keys.has('ArrowRight') || this.keys.has('d')) (cam.x -= d), (moved = true);
     if (this.keys.has('ArrowUp') || this.keys.has('w')) (cam.y += d), (moved = true);
     if (this.keys.has('ArrowDown') || this.keys.has('s')) (cam.y -= d), (moved = true);
-    if (moved) {
-      this.clampCamera();
-      this.refreshHover();
-    } else if (this.mouse && this.tool === 'inspect') {
-      // Room info changes over time, keep the tooltip fresh.
-      this.refreshHover();
-    }
+    if (moved) this.clampCamera();
+    // Room info changes over time, so keep the hover fresh.
+    if (moved || (this.mouse && this.tool === 'inspect')) this.refreshHover();
   }
 
   private clampCamera(): void {
@@ -88,7 +96,7 @@ export class Controller {
     const w = window.innerWidth;
     const h = window.innerHeight;
     cam.x = Math.min(w * 0.8, Math.max(w * 0.2 - plotW, cam.x));
-    cam.y = Math.min(h * 0.2 + plotH, Math.max(h * 0.4, cam.y));
+    cam.y = Math.min(h * 0.2 + plotH, Math.max(h * 0.45, cam.y));
   }
 
   private zoomAt(sx: number, sy: number, factor: number): void {
@@ -119,24 +127,38 @@ export class Controller {
     }
     if (e.button !== 0) return;
     const c = this.cellAt(e.clientX, e.clientY);
+    const w = this.sim.world;
     switch (this.tool) {
       case 'lobby':
       case 'floor':
       case 'elevator':
+      case 'express':
         this.drag = c;
         break;
       case 'office':
-      case 'apartment': {
-        const x0 = this.sim.world.roomLeft(this.tool, c.x);
-        const plan = this.sim.world.planRoom(this.tool, c.floor, x0);
-        if (plan.ok && this.sim.world.buildRoom(this.tool, c.floor, x0)) this.spent(plan.cost);
+      case 'apartment':
+      case 'shop':
+      case 'restaurant':
+      case 'hotel': {
+        const kind: RoomKind = this.tool;
+        const x0 = w.roomLeft(kind, c.x);
+        const plan = w.planRoom(kind, c.floor, x0);
+        if (plan.ok && w.buildRoom(kind, c.floor, x0)) this.spent(plan.cost);
+        else this.refuse(plan);
+        break;
+      }
+      case 'stairs': {
+        const x0 = w.leftFor(BALANCE.transport.stairs.width, c.x);
+        const plan = w.planStairs(c.floor, x0);
+        if (plan.ok && w.buildStairs(c.floor, x0)) this.spent(plan.cost);
         else this.refuse(plan);
         break;
       }
       case 'demolish': {
-        const res = this.sim.world.demolish(c.floor, c.x);
+        const res = w.demolish(c.floor, c.x);
         if (res.room) this.sim.onRoomRemoved(res.room);
         if (res.shaft) this.sim.onShaftRemoved(res.shaft);
+        if (res.stairs) this.sim.onStairsRemoved(res.stairs);
         if (!res.ok && res.reason) this.hud.toast(REASONS[res.reason], 'bad');
         break;
       }
@@ -169,8 +191,8 @@ export class Controller {
       const res = w.buildStrip(this.tool, a.floor, a.x, c.x);
       if (res.ok) this.spent(res.cost);
       else if (res.reason !== 'nothingToBuild') this.refuse(res);
-    } else if (this.tool === 'elevator') {
-      const res = w.buildShaft(a.floor, a.x, c.floor);
+    } else if (this.tool === 'elevator' || this.tool === 'express') {
+      const res = w.buildShaft(this.tool, a.floor, a.x, c.floor);
       if (res.ok) this.spent(res.cost);
       else this.refuse(res);
     }
@@ -199,14 +221,14 @@ export class Controller {
       this.keys.delete(key);
       return;
     }
-    if (e.target instanceof HTMLInputElement) return;
+    if (this.hud.dialogOpen) return;
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'a', 'd', 'w', 's'].includes(key)) {
       this.keys.add(key);
       e.preventDefault();
       return;
     }
-    const n = Number(key);
-    if (n >= 1 && n <= TOOLS.length) this.setTool(TOOLS[n - 1]);
+    const tool = TOOL_KEYS[key];
+    if (tool) this.setTool(tool);
     else if (key === ' ') {
       this.hud.togglePause();
       e.preventDefault();
@@ -242,6 +264,13 @@ export class Controller {
       } else this.hud.showTooltip(info ?? null, sx, sy);
     };
 
+    if (ROOM_TOOLS.includes(this.tool)) {
+      const kind = this.tool as RoomKind;
+      const x0 = w.roomLeft(kind, c.x);
+      const plan = w.planRoom(kind, c.floor, x0);
+      const width = BALANCE.rooms[kind].width;
+      return show({ x0, x1: x0 + width, floor0: c.floor, floor1: c.floor, ok: plan.ok }, plan);
+    }
     switch (this.tool) {
       case 'inspect':
         return show(null, null, this.describe(c.floor, c.x));
@@ -253,18 +282,19 @@ export class Controller {
         const x1 = Math.min(w.width, Math.max(a.x, c.x) + 1);
         return show({ x0, x1, floor0: a.floor, floor1: a.floor, ok: plan.ok }, plan);
       }
-      case 'office':
-      case 'apartment': {
-        const x0 = w.roomLeft(this.tool, c.x);
-        const plan = w.planRoom(this.tool, c.floor, x0);
-        const width = BALANCE.rooms[this.tool].width;
-        return show({ x0, x1: x0 + width, floor0: c.floor, floor1: c.floor, ok: plan.ok }, plan);
+      case 'stairs': {
+        const sw = BALANCE.transport.stairs.width;
+        const x0 = w.leftFor(sw, c.x);
+        const plan = w.planStairs(c.floor, x0);
+        return show({ x0, x1: x0 + sw, floor0: c.floor, floor1: c.floor, ok: plan.ok }, plan);
       }
-      case 'elevator': {
+      case 'elevator':
+      case 'express': {
         const a = this.drag ?? c;
         const to = this.drag ? c.floor : c.floor + 1;
-        const plan = w.planShaft(a.floor, a.x, to);
-        const preview = { x0: plan.x, x1: plan.x + BALANCE.elevator.width, floor0: plan.bottom, floor1: plan.top, ok: plan.ok };
+        const plan = w.planShaft(this.tool, a.floor, a.x, to);
+        const width = BALANCE.transport[this.tool].width;
+        const preview = { x0: plan.x, x1: plan.x + width, floor0: plan.bottom, floor1: plan.top, ok: plan.ok };
         return show(preview, this.drag ? plan : null, this.drag ? undefined : 'Sleep omhoog of omlaag');
       }
       case 'demolish': {
@@ -278,6 +308,10 @@ export class Controller {
           const s = w.shafts.get(plan.id!)!;
           return show({ x0: s.x, x1: s.x + s.width, floor0: s.bottom, floor1: s.top, ok: false }, null, 'Lift slopen');
         }
+        if (plan.target === 'stairs') {
+          const s = w.stairs.get(plan.id!)!;
+          return show({ x0: s.x, x1: s.x + s.width, floor0: s.floor, floor1: s.floor, ok: false }, null, 'Trap slopen');
+        }
         return show({ x0: c.x, x1: c.x + 1, floor0: c.floor, floor1: c.floor, ok: false }, null, 'Vloer slopen');
       }
     }
@@ -285,25 +319,39 @@ export class Controller {
 
   /** Tooltip text for the inspect tool. */
   private describe(floor: number, x: number): string | undefined {
-    const w = this.sim.world;
+    const sim = this.sim;
+    const w = sim.world;
     const cell = w.cell(floor, x);
     if (!cell || cell.base === 'none') return undefined;
     const room = cell.occupant ? w.rooms.get(cell.occupant) : undefined;
     if (room) {
       const name = `${ROOM_NAMES[room.kind]} · ${floorName(room.floor)}`;
-      const rent = `Huur ${money(BALANCE.rooms[room.kind].rentPerDay)} per dag`;
-      if (!room.rented) {
-        const reach = w.shaftForRoom(room) ? 'Wacht op een huurder' : 'Niet bereikbaar: zet een lift naast deze ruimte';
-        return `${name}\nTe huur. ${reach}\n${rent}`;
-      }
+      const mood = `${moodLabel(room.mood)} (${Math.round(room.mood)})`;
       let inside = 0;
-      for (const id of room.peopleIds) if (this.sim.people.get(id)?.state === 'inside') inside++;
-      return `${name}\nVerhuurd · ${moodLabel(room.mood)} (${Math.round(room.mood)})\n${inside} van ${room.peopleIds.length} mensen binnen\n${rent}`;
+      for (const p of sim.people.values()) if (p.state === 'inside' && p.atRoom === room.id) inside++;
+      switch (room.kind) {
+        case 'office':
+        case 'apartment': {
+          const rent = `Huur ${money(BALANCE.rooms[room.kind].rentPerDay)} per dag`;
+          if (!room.rented) return `${name}\nTe huur. Wacht op een huurder als hij bereikbaar is.\n${rent}`;
+          return `${name}\nVerhuurd · ${mood}\n${inside} van ${room.peopleIds.length} mensen binnen\n${rent}`;
+        }
+        case 'shop':
+        case 'restaurant': {
+          const spec = BALANCE.rooms[room.kind];
+          return `${name}\nOpen ${spec.open[0]}:00 tot ${spec.open[1]}:00 · ${mood}\n${room.visitors} van ${spec.capacity} klanten binnen\nVandaag verdiend: ${money(room.earnedToday)}\nKosten ${money(spec.upkeepPerDay)} per dag`;
+        }
+        case 'hotel':
+          return `${name}\n${room.rented ? `Geboekt (${room.peopleIds.length} gast${room.peopleIds.length > 1 ? 'en' : ''})` : 'Vrij vannacht'} · ${mood}\n${money(BALANCE.rooms.hotel.incomePerNight)} per nacht`;
+      }
     }
     const shaft = cell.occupant ? w.shafts.get(cell.occupant) : undefined;
     if (shaft) {
-      return `Lift · ${floorName(shaft.bottom)} t/m ${floorName(shaft.top)}\n${shaft.waiting.length} wachtend · ${shaft.car.riders.length} in de lift`;
+      const name = shaft.kind === 'express' ? 'Expreslift' : 'Lift';
+      return `${name} · ${floorName(shaft.bottom)} t/m ${floorName(shaft.top)}\n${shaft.waiting.length} wachtend · ${shaft.car.riders.length} van ${BALANCE.transport[shaft.kind].capacity} in de lift`;
     }
+    const stairs = cell.occupant ? w.stairs.get(cell.occupant) : undefined;
+    if (stairs) return `Trap · van ${floorName(stairs.floor)} naar ${floorName(stairs.floor + 1)}`;
     return cell.base === 'lobby' ? 'Lobby' : `Lege vloer · ${floorName(floor)}`;
   }
 }

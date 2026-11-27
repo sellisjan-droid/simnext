@@ -1,12 +1,13 @@
-import { BALANCE } from '../config/balance';
+import { BALANCE, type RoomKind, type ShaftKind } from '../config/balance';
+
+export type { RoomKind, ShaftKind };
 
 /** What a single grid cell is built of. */
 export type BaseKind = 'none' | 'lobby' | 'floor';
-export type RoomKind = 'office' | 'apartment';
 
 export interface Cell {
   base: BaseKind;
-  /** Id of the room or shaft standing on this cell, 0 when free. */
+  /** Id of the room, shaft or stairs standing on this cell, 0 when free. */
   occupant: number;
 }
 
@@ -16,10 +17,16 @@ export interface Room {
   floor: number;
   x: number;
   width: number;
+  /** Offices and apartments: has a tenant. Hotel rooms: has a booking tonight. */
   rented: boolean;
-  /** Tenant happiness, 0-100. */
+  /** Happiness of the people using this room, 0-100. */
   mood: number;
+  /** Tenants (offices, apartments) or guests (hotel). */
   peopleIds: number[];
+  /** Customers inside right now (shops, restaurants). */
+  visitors: number;
+  /** Money earned today by this room, for the info tooltip. */
+  earnedToday: number;
 }
 
 export interface Car {
@@ -34,6 +41,7 @@ export interface Car {
 
 export interface Shaft {
   id: number;
+  kind: ShaftKind;
   x: number;
   width: number;
   bottom: number;
@@ -41,6 +49,14 @@ export interface Shaft {
   car: Car;
   /** People waiting for this elevator. */
   waiting: number[];
+}
+
+/** Stairs on `floor` lead up to `floor + 1`. People enter at the left foot and leave at the right top. */
+export interface Stairs {
+  id: number;
+  floor: number;
+  x: number;
+  width: number;
 }
 
 /** Result of checking whether something can be built. */
@@ -61,7 +77,8 @@ export type PlanReason =
   | 'nothingToBuild'
   | 'notEnoughMoney'
   | 'somethingAbove'
-  | 'nothingHere';
+  | 'nothingHere'
+  | 'topFloor';
 
 export interface ShaftPlan extends Plan {
   x: number;
@@ -71,8 +88,25 @@ export interface ShaftPlan extends Plan {
   extendId?: number;
 }
 
+export type DemolishTarget = 'room' | 'shaft' | 'stairs' | 'base';
+
+/** Everything needed to rebuild a World, as plain JSON. */
+export interface WorldData {
+  width: number;
+  maxFloor: number;
+  money: number;
+  nextId: number;
+  bases: string[];
+  rooms: Room[];
+  shafts: Shaft[];
+  stairs: Stairs[];
+}
+
+const BASE_CODE: Record<BaseKind, string> = { none: '.', lobby: 'L', floor: 'F' };
+const CODE_BASE: Record<string, BaseKind> = { '.': 'none', L: 'lobby', F: 'floor' };
+
 /**
- * The building itself: the grid of cells plus rooms and elevator shafts.
+ * The building itself: the grid of cells plus rooms, elevator shafts and stairs.
  * Contains placement rules but no time-based simulation.
  */
 export class World {
@@ -81,8 +115,9 @@ export class World {
   readonly cells: Cell[][];
   readonly rooms = new Map<number, Room>();
   readonly shafts = new Map<number, Shaft>();
+  readonly stairs = new Map<number, Stairs>();
   money: number;
-  /** Bumped on every structural change, so the renderer knows when to redraw. */
+  /** Bumped on every structural change, so the renderer and route finder know when to refresh. */
   version = 0;
   private nextId = 1;
 
@@ -97,6 +132,44 @@ export class World {
       this.cells.push(row);
     }
   }
+
+  // ---- Save / load ------------------------------------------------------
+
+  toData(): WorldData {
+    return {
+      width: this.width,
+      maxFloor: this.maxFloor,
+      money: this.money,
+      nextId: this.nextId,
+      bases: this.cells.map((row) => row.map((c) => BASE_CODE[c.base]).join('')),
+      rooms: [...this.rooms.values()],
+      shafts: [...this.shafts.values()],
+      stairs: [...this.stairs.values()],
+    };
+  }
+
+  static fromData(d: WorldData): World {
+    const w = new World(d.width, d.maxFloor, d.money);
+    w.nextId = d.nextId;
+    d.bases.forEach((row, f) => {
+      for (let x = 0; x < row.length && x < w.width; x++) w.cells[f][x].base = CODE_BASE[row[x]] ?? 'none';
+    });
+    for (const r of d.rooms) {
+      w.rooms.set(r.id, r);
+      for (let x = r.x; x < r.x + r.width; x++) w.cells[r.floor][x].occupant = r.id;
+    }
+    for (const s of d.shafts) {
+      w.shafts.set(s.id, s);
+      for (let f = s.bottom; f <= s.top; f++) for (let x = s.x; x < s.x + s.width; x++) w.cells[f][x].occupant = s.id;
+    }
+    for (const s of d.stairs) {
+      w.stairs.set(s.id, s);
+      for (let x = s.x; x < s.x + s.width; x++) w.cells[s.floor][x].occupant = s.id;
+    }
+    return w;
+  }
+
+  // ---- Basics -----------------------------------------------------------
 
   inBounds(floor: number, x: number): boolean {
     return floor >= 0 && floor <= this.maxFloor && x >= 0 && x < this.width;
@@ -114,6 +187,12 @@ export class World {
   /** A cell can get a new base if it is on the ground or there is something built right below it. */
   isSupported(floor: number, x: number): boolean {
     return floor === 0 || this.hasBase(floor - 1, x);
+  }
+
+  /** Highest floor with anything built on it, or -1. */
+  topFloor(): number {
+    for (let f = this.maxFloor; f >= 0; f--) if (this.cells[f].some((c) => c.base !== 'none')) return f;
+    return -1;
   }
 
   private baseCost(floor: number): number {
@@ -144,12 +223,22 @@ export class World {
     return plan;
   }
 
+  private freeCells(floor: number, x0: number, width: number): PlanReason | null {
+    for (let x = x0; x < x0 + width; x++) {
+      const c = this.cell(floor, x);
+      if (!c) return 'outOfBounds';
+      if (c.occupant) return 'occupied';
+    }
+    return null;
+  }
+
   // ---- Lobby and floors -------------------------------------------------
 
   /** Plan a horizontal strip of lobby (ground floor) or floor (upper floors). */
   planStrip(kind: 'lobby' | 'floor', floor: number, xa: number, xb: number): Plan {
     if (kind === 'lobby' && floor !== 0) return { ok: false, cost: 0, reason: 'lobbyOnlyGround' };
     if (kind === 'floor' && floor === 0) return { ok: false, cost: 0, reason: 'groundIsLobby' };
+    if (floor < 0 || floor > this.maxFloor) return { ok: false, cost: 0, reason: 'outOfBounds' };
     const x0 = Math.max(0, Math.min(xa, xb));
     const x1 = Math.min(this.width - 1, Math.max(xa, xb));
     const plan = this.planBase(floor, x0, x1 - x0 + 1);
@@ -170,22 +259,23 @@ export class World {
 
   // ---- Rooms ------------------------------------------------------------
 
-  /** Left edge of a room centred on the given cell. */
+  /** Left edge of something `width` wide centred on the given cell. */
+  leftFor(width: number, centerX: number): number {
+    return centerX - Math.floor(width / 2);
+  }
+
   roomLeft(kind: RoomKind, centerX: number): number {
-    return centerX - Math.floor(BALANCE.rooms[kind].width / 2);
+    return this.leftFor(BALANCE.rooms[kind].width, centerX);
   }
 
   planRoom(kind: RoomKind, floor: number, x0: number): Plan {
-    const width = BALANCE.rooms[kind].width;
-    if (floor === 0) return { ok: false, cost: 0, reason: 'groundIsLobby' };
-    for (let x = x0; x < x0 + width; x++) {
-      const c = this.cell(floor, x);
-      if (!c) return { ok: false, cost: 0, reason: 'outOfBounds' };
-      if (c.occupant) return { ok: false, cost: 0, reason: 'occupied' };
-    }
-    const base = this.planBase(floor, x0, width);
+    const spec = BALANCE.rooms[kind];
+    if (floor === 0 && !spec.ground) return { ok: false, cost: 0, reason: 'groundIsLobby' };
+    const blocked = this.freeCells(floor, x0, spec.width);
+    if (blocked) return { ok: false, cost: 0, reason: blocked };
+    const base = this.planBase(floor, x0, spec.width);
     if (!base.ok) return base;
-    return this.withMoneyCheck({ ok: true, cost: base.cost + BALANCE.rooms[kind].cost });
+    return this.withMoneyCheck({ ok: true, cost: base.cost + spec.cost });
   }
 
   buildRoom(kind: RoomKind, floor: number, x0: number): Room | null {
@@ -202,12 +292,39 @@ export class World {
       rented: false,
       mood: BALANCE.mood.start,
       peopleIds: [],
+      visitors: 0,
+      earnedToday: 0,
     };
     for (let x = x0; x < x0 + width; x++) this.cells[floor][x].occupant = room.id;
     this.rooms.set(room.id, room);
     this.money -= plan.cost;
     this.version++;
     return room;
+  }
+
+  // ---- Stairs -----------------------------------------------------------
+
+  planStairs(floor: number, x0: number): Plan {
+    const w = BALANCE.transport.stairs.width;
+    if (floor >= this.maxFloor) return { ok: false, cost: 0, reason: 'topFloor' };
+    const blocked = this.freeCells(floor, x0, w);
+    if (blocked) return { ok: false, cost: 0, reason: blocked };
+    const base = this.planBase(floor, x0, w);
+    if (!base.ok) return base;
+    return this.withMoneyCheck({ ok: true, cost: base.cost + BALANCE.transport.stairs.cost });
+  }
+
+  buildStairs(floor: number, x0: number): Stairs | null {
+    const plan = this.planStairs(floor, x0);
+    if (!plan.ok) return null;
+    const w = BALANCE.transport.stairs.width;
+    this.addBase(floor, x0, w);
+    const s: Stairs = { id: this.nextId++, floor, x: x0, width: w };
+    for (let x = x0; x < x0 + w; x++) this.cells[floor][x].occupant = s.id;
+    this.stairs.set(s.id, s);
+    this.money -= plan.cost;
+    this.version++;
+    return s;
   }
 
   // ---- Elevators --------------------------------------------------------
@@ -217,18 +334,16 @@ export class World {
     return id ? this.shafts.get(id) : undefined;
   }
 
-  shaftCost(floors: number): number {
-    return BALANCE.elevator.baseCost + BALANCE.elevator.costPerFloor * floors;
-  }
-
   /**
    * Plan an elevator dragged from (anchorFloor, anchorX) to toFloor.
-   * Starting the drag on an existing shaft extends that shaft.
+   * Starting the drag on an existing shaft of the same kind extends that shaft.
    */
-  planShaft(anchorFloor: number, anchorX: number, toFloor: number): ShaftPlan {
-    const w = BALANCE.elevator.width;
-    const existing = this.shaftAt(anchorFloor, anchorX);
-    const x = existing ? existing.x : anchorX - Math.floor(w / 2);
+  planShaft(kind: ShaftKind, anchorFloor: number, anchorX: number, toFloor: number): ShaftPlan {
+    const spec = BALANCE.transport[kind];
+    const w = spec.width;
+    const found = this.shaftAt(anchorFloor, anchorX);
+    const existing = found && found.kind === kind ? found : undefined;
+    const x = existing ? existing.x : this.leftFor(w, anchorX);
     let bottom = Math.min(anchorFloor, toFloor);
     let top = Math.max(anchorFloor, toFloor);
     if (existing) {
@@ -241,8 +356,7 @@ export class World {
 
     let cost = 0;
     for (let f = bottom; f <= top; f++) {
-      const isOld = !!existing && f >= existing.bottom && f <= existing.top;
-      if (isOld) continue;
+      if (existing && f >= existing.bottom && f <= existing.top) continue;
       for (let cx = x; cx < x + w; cx++) {
         const c = this.cells[f][cx];
         if (c.occupant) return fail('occupied');
@@ -255,14 +369,14 @@ export class World {
     }
     const newFloors = existing ? top - bottom - (existing.top - existing.bottom) : top - bottom + 1;
     if (newFloors <= 0) return fail('nothingToBuild');
-    cost += existing ? BALANCE.elevator.costPerFloor * newFloors : this.shaftCost(newFloors);
+    cost += (existing ? 0 : spec.baseCost) + spec.costPerFloor * newFloors;
     return this.withMoneyCheck({ ok: true, cost, x, bottom, top, extendId: existing?.id });
   }
 
-  buildShaft(anchorFloor: number, anchorX: number, toFloor: number): ShaftPlan {
-    const plan = this.planShaft(anchorFloor, anchorX, toFloor);
+  buildShaft(kind: ShaftKind, anchorFloor: number, anchorX: number, toFloor: number): ShaftPlan {
+    const plan = this.planShaft(kind, anchorFloor, anchorX, toFloor);
     if (!plan.ok) return plan;
-    const w = BALANCE.elevator.width;
+    const w = BALANCE.transport[kind].width;
     let shaft: Shaft;
     if (plan.extendId) {
       shaft = this.shafts.get(plan.extendId)!;
@@ -271,6 +385,7 @@ export class World {
     } else {
       shaft = {
         id: this.nextId++,
+        kind,
         x: plan.x,
         width: w,
         bottom: plan.bottom,
@@ -292,11 +407,11 @@ export class World {
   // ---- Demolish ---------------------------------------------------------
 
   /** What a demolish click at this cell would remove. */
-  planDemolish(floor: number, x: number): Plan & { target?: 'room' | 'shaft' | 'base'; id?: number } {
+  planDemolish(floor: number, x: number): Plan & { target?: DemolishTarget; id?: number } {
     const c = this.cell(floor, x);
     if (!c || c.base === 'none') return { ok: false, cost: 0, reason: 'nothingHere' };
     if (c.occupant) {
-      const target = this.rooms.has(c.occupant) ? 'room' : 'shaft';
+      const target: DemolishTarget = this.rooms.has(c.occupant) ? 'room' : this.shafts.has(c.occupant) ? 'shaft' : 'stairs';
       return { ok: true, cost: 0, target, id: c.occupant };
     }
     if (this.hasBase(floor + 1, x)) return { ok: false, cost: 0, reason: 'somethingAbove' };
@@ -304,35 +419,43 @@ export class World {
   }
 
   /**
-   * Remove whatever is at the cell. Rooms and shafts leave their floor behind;
+   * Remove whatever is at the cell. Rooms, shafts and stairs leave their floor behind;
    * a bare floor cell is removed only if nothing rests on it.
-   * Returns the removed room or shaft so the simulation can clean up its people.
+   * Returns what was removed so the simulation can clean up its people.
    */
-  demolish(floor: number, x: number): { ok: boolean; room?: Room; shaft?: Shaft; reason?: PlanReason } {
+  demolish(floor: number, x: number): { ok: boolean; room?: Room; shaft?: Shaft; stairs?: Stairs; reason?: PlanReason } {
     const plan = this.planDemolish(floor, x);
     if (!plan.ok) return { ok: false, reason: plan.reason };
-    if (plan.target === 'room') {
-      const room = this.rooms.get(plan.id!)!;
-      for (let cx = room.x; cx < room.x + room.width; cx++) this.cells[room.floor][cx].occupant = 0;
-      this.rooms.delete(room.id);
-      this.version++;
-      return { ok: true, room };
-    }
-    if (plan.target === 'shaft') {
-      const shaft = this.shafts.get(plan.id!)!;
-      for (let f = shaft.bottom; f <= shaft.top; f++) {
-        for (let cx = shaft.x; cx < shaft.x + shaft.width; cx++) this.cells[f][cx].occupant = 0;
-      }
-      this.shafts.delete(shaft.id);
-      this.version++;
-      return { ok: true, shaft };
-    }
-    this.cells[floor][x].base = 'none';
+    const clear = (f: number, x0: number, w: number) => {
+      for (let cx = x0; cx < x0 + w; cx++) this.cells[f][cx].occupant = 0;
+    };
     this.version++;
-    return { ok: true };
+    switch (plan.target) {
+      case 'room': {
+        const room = this.rooms.get(plan.id!)!;
+        clear(room.floor, room.x, room.width);
+        this.rooms.delete(room.id);
+        return { ok: true, room };
+      }
+      case 'shaft': {
+        const shaft = this.shafts.get(plan.id!)!;
+        for (let f = shaft.bottom; f <= shaft.top; f++) clear(f, shaft.x, shaft.width);
+        this.shafts.delete(shaft.id);
+        return { ok: true, shaft };
+      }
+      case 'stairs': {
+        const s = this.stairs.get(plan.id!)!;
+        clear(s.floor, s.x, s.width);
+        this.stairs.delete(s.id);
+        return { ok: true, stairs: s };
+      }
+      default:
+        this.cells[floor][x].base = 'none';
+        return { ok: true };
+    }
   }
 
-  // ---- Routing helpers --------------------------------------------------
+  // ---- Geometry helpers -------------------------------------------------
 
   /** True if one can walk along a floor between two x positions (in cells, may be fractional). */
   canWalk(floor: number, xa: number, xb: number): boolean {
@@ -350,39 +473,9 @@ export class World {
     return room.x + room.width / 2;
   }
 
-  /** The best elevator to get from one spot to another, or undefined if there is no way. */
-  findShaft(fromFloor: number, fromX: number, toFloor: number, toX: number): Shaft | undefined {
-    let best: Shaft | undefined;
-    let bestDist = Infinity;
-    for (const s of this.shafts.values()) {
-      if (fromFloor < s.bottom || fromFloor > s.top || toFloor < s.bottom || toFloor > s.top) continue;
-      const cx = this.shaftCenter(s);
-      if (!this.canWalk(fromFloor, fromX, cx) || !this.canWalk(toFloor, cx, toX)) continue;
-      const dist = Math.abs(fromX - cx) + Math.abs(toX - cx);
-      if (dist < bestDist) {
-        best = s;
-        bestDist = dist;
-      }
-    }
-    return best;
-  }
-
-  /** All elevators that connect the lobby with a room, nearest first. */
-  shaftsForRoom(room: Room): Shaft[] {
-    const cx = this.roomCenter(room);
-    const list: Shaft[] = [];
-    for (const s of this.shafts.values()) {
-      if (s.bottom > 0 || s.top < room.floor) continue;
-      if (!this.canWalk(room.floor, this.shaftCenter(s), cx)) continue;
-      list.push(s);
-    }
-    const dist = (s: Shaft) => Math.abs(this.shaftCenter(s) - cx);
-    return list.sort((a, b) => dist(a) - dist(b));
-  }
-
-  /** The nearest elevator between the lobby and a room, if any. */
-  shaftForRoom(room: Room): Shaft | undefined {
-    return this.shaftsForRoom(room)[0];
+  /** Where people get on or off the stairs on a floor (foot on the lower floor, top on the upper floor). */
+  stairsPoint(s: Stairs, floor: number): number {
+    return floor === s.floor ? s.x + 0.5 : s.x + s.width - 0.5;
   }
 
   /** Left and right end (exclusive right) of the connected strip of floor around x. */
@@ -392,5 +485,21 @@ export class World {
     while (this.hasBase(floor, l - 1)) l--;
     while (this.hasBase(floor, r + 1)) r++;
     return [l, r + 1];
+  }
+
+  /** The doors to the street: both ends of every lobby strip. */
+  entrances(): number[] {
+    const out: number[] = [];
+    let x = 0;
+    while (x < this.width) {
+      if (!this.hasBase(0, x)) {
+        x++;
+        continue;
+      }
+      const [l, r] = this.stripAround(0, x);
+      out.push(l + 0.5, r - 0.5);
+      x = r;
+    }
+    return out;
   }
 }

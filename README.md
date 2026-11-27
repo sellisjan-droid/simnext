@@ -1,25 +1,34 @@
 # SimNext
 
-Een torenbouwspel voor in de browser. Je bouwt een lobby, zet er een lift in,
-plaatst kantoren en appartementen en verdient huur. Houd de wachttijden bij de
-lift kort, anders vertrekken je huurders.
-
-Dit is de eerste speelbare versie. Het idee is om stap voor stap uit te breiden.
+Een torenbouwspel voor in de browser. Bouw een lobby, liften en trappen, vul je toren met
+kantoren, appartementen, winkels, restaurants en hotelkamers, en laat hem groeien van
+nieuwbouw (★) tot wereldtoren (★★★★★). Houd de wachttijden bij de lift kort, anders
+vertrekken je huurders.
 
 ## Zo speel je
 
-1. **Lobby** (toets 2): sleep over de begane grond. Alle mensen komen hier binnen.
-2. **Lift** (toets 6): sleep vanaf de lobby omhoog. Begin op een bestaande lift om hem langer te maken.
-3. **Verdieping** (toets 3): sleep over een verdieping om lege vloer te bouwen. Er moet altijd iets onder zitten.
-4. **Kantoor** (toets 4) of **Appartement** (toets 5): klik op een plek naast de lift.
-5. Een ruimte met een rood bordje is **te huur**. Is hij via de lift bereikbaar, dan komt er vanzelf een huurder.
-6. Om middernacht krijg je **huur** binnen en betaal je **onderhoud** voor elke lift.
-7. Het bolletje rechtsboven in een ruimte laat zien hoe **tevreden** de huurder is.
-   Lang wachten op de lift maakt mensen ontevreden. Bij rood vertrekt de huurder.
-   Een tweede lift helpt als je toren hoger wordt.
-8. **Slopen** (toets 7): klik op een ruimte of lift. Je krijgt geen geld terug.
+1. **🚪 Lobby** (toets 2): sleep over de begane grond. Iedereen komt hier binnen.
+2. **🛗 Lift** (toets 5): sleep vanaf de lobby omhoog. Begin op een bestaande lift om hem langer te maken.
+3. **🧱 Verdieping** (toets 3): sleep om lege vloer te bouwen. Er moet altijd iets onder zitten.
+4. **🪜 Trap** (toets 4): klik om een trap naar de verdieping erboven te zetten. Goedkoop en handig voor korte stukjes.
+5. **💼 Kantoor** (6) en **🏠 Appartement** (7): betalen elke nacht huur. Een rood bordje betekent *te huur*.
+6. Meer mensen leveren **sterren** op, en die spelen nieuwe dingen vrij:
 
-Overige bediening:
+   | Sterren | Mensen | Vrijgespeeld |
+   | --- | --- | --- |
+   | ★★ | 60 | 🛍️ Winkel (8), 🍽️ Restaurant (9), ook in de lobby |
+   | ★★★ | 200 | 🛏️ Hotelkamer (0) |
+   | ★★★★ | 450 | ⚡ Expreslift (E): sneller en groter |
+   | ★★★★★ | 900 | Wereldtoren! |
+
+7. **Winkels en restaurants** trekken bezoekers van buiten en verdienen per klant. Kantoormensen gaan lunchen, bewoners gaan 's avonds uit eten.
+8. **Hotelgasten** checken 's avonds in (dan betalen ze) en vertrekken 's ochtends.
+9. Het **lampje** rechtsboven in een ruimte toont de tevredenheid. Lang wachten op de lift kost punten. Bij rood vertrekt de huurder.
+10. Mensen kiezen zelf de snelste route en stappen over tussen liften en trappen.
+11. **🧨 Slopen** (X): klik op een ruimte, lift of trap. Je krijgt geen geld terug.
+
+Het spel wordt automatisch opgeslagen in je browser. Via het menu (☰) kun je ook zelf
+opslaan of een nieuw spel beginnen.
 
 | Wat | Hoe |
 | --- | --- |
@@ -27,12 +36,8 @@ Overige bediening:
 | Zoomen | Ctrl + scrollen, of `+` en `-` |
 | Camera terugzetten | Home |
 | Pauze | spatiebalk |
-| Tijd sneller | knoppen 1×, 2×, 4× rechtsboven |
-| Info over een ruimte | gereedschap Bekijken (toets 1) en met de muis eroverheen |
-
-Kantoormedewerkers komen tussen 7:30 en 9:30 en gaan tussen 16:30 en 18:30 weer weg.
-Bewoners van appartementen gaan 's ochtends de deur uit en komen 's avonds terug.
-Dat zorgt voor drukte bij de lift in de ochtend en aan het eind van de middag.
+| Tijd sneller | knoppen ▶, ▶▶, ▶▶▶ rechtsboven |
+| Info over een ruimte | 🔍 Bekijken (toets 1) en met de muis eroverheen |
 
 ## Spelen op je eigen computer
 
@@ -58,7 +63,9 @@ Het spel staat daarna op `https://<gebruikersnaam>.github.io/simnext/`.
 - **Alle spelgetallen** (prijzen, huur, liftsnelheid, tijden, tevredenheid) staan in
   [`src/config/balance.ts`](src/config/balance.ts). Daar pas je de balans aan.
 - `src/game/world.ts`: het raster, gebouwen en bouwregels.
-- `src/game/sim.ts`: klok, huurders, mensen, liften en geld.
-- `src/render/renderer.ts`: tekenen met PixiJS.
+- `src/game/routing.ts`: routes zoeken over liften en trappen.
+- `src/game/sim.ts`: klok, huurders, bezoekers, gasten, liften, sterren en geld.
+- `src/game/save.ts`: opslaan en laden.
+- `src/render/`: tekenen met PixiJS (`backdrop.ts` lucht en stad, `building.ts` gebouw en interieurs, `actors.ts` mensen, liften en verkeer).
 - `src/ui/`: knoppen, teksten (`strings.ts`, in het Nederlands) en muis/toetsenbord.
 - In de browserconsole is `game.world` en `game.sim` beschikbaar om mee te experimenteren.

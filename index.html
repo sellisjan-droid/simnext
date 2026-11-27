@@ -10,16 +10,29 @@
     <div id="game"></div>
 
     <header id="topbar">
-      <div class="title">SimNext</div>
+      <div class="brand">SimNext</div>
+      <div id="rating" title="Torenwaardering">
+        <div id="stars"></div>
+        <div class="rating-text"><span id="star-title"></span><span id="star-next"></span></div>
+        <div class="bar"><div id="star-bar"></div></div>
+      </div>
       <div class="stat"><span class="label">Geld</span><span id="money"></span></div>
-      <div class="stat"><span class="label">Tijd</span><span id="clock"></span></div>
+      <div class="stat"><span class="label" id="date"></span><span id="clock"></span></div>
       <div class="stat"><span class="label">Mensen</span><span id="population"></span></div>
-      <div class="stat"><span class="label">Netto per dag</span><span id="income"></span></div>
+      <div class="spacer"></div>
       <div id="speed"></div>
-      <button id="help-btn" title="Uitleg">?</button>
+      <div class="menu-wrap">
+        <button id="menu-btn" title="Menu">☰</button>
+        <div id="menu" hidden>
+          <button data-action="help">❓ Uitleg</button>
+          <button data-action="save">💾 Nu opslaan</button>
+          <button data-action="new">✨ Nieuw spel</button>
+        </div>
+      </div>
     </header>
 
     <div id="messages"></div>
+    <div id="saved" hidden>Opgeslagen</div>
 
     <footer id="toolbar">
       <div id="tools"></div>
@@ -28,23 +41,41 @@
 
     <div id="tooltip" hidden></div>
 
-    <div id="help" hidden>
+    <div id="banner" hidden>
+      <div id="banner-stars"></div>
+      <div id="banner-title"></div>
+      <div id="banner-text"></div>
+    </div>
+
+    <div id="confirm" class="overlay" hidden>
+      <div class="panel small">
+        <h2>Nieuw spel beginnen?</h2>
+        <p>Je huidige toren wordt gewist.</p>
+        <div class="row">
+          <button id="confirm-no">Annuleren</button>
+          <button id="confirm-yes" class="primary">Ja, opnieuw beginnen</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="help" class="overlay" hidden>
       <div class="panel">
         <h2>Welkom bij SimNext</h2>
-        <p>Bouw een toren, verhuur ruimtes en houd je huurders tevreden.</p>
+        <p>Bouw een toren, laat hem groeien van nieuwbouw tot wereldtoren, en houd iedereen tevreden.</p>
         <ol>
-          <li><b>Lobby</b>: sleep over de begane grond. Hier komen alle mensen binnen.</li>
-          <li><b>Lift</b>: sleep vanaf de lobby omhoog. Zonder lift komt niemand boven.</li>
-          <li><b>Kantoor</b> of <b>Appartement</b>: klik op een verdieping naast de lift. Er moet iets onder zitten.</li>
-          <li>Lege ruimtes met een rood bordje zijn <b>te huur</b>. Als ze via de lift bereikbaar zijn, komt er vanzelf een huurder.</li>
-          <li>Om middernacht krijg je <b>huur</b> en betaal je liftonderhoud.</li>
-          <li>Moeten mensen lang op de lift wachten, dan daalt hun tevredenheid (het bolletje rechtsboven in een ruimte). Rood betekent dat de huurder gaat vertrekken.</li>
+          <li><b>🚪 Lobby</b>: sleep over de begane grond. Hier komt iedereen binnen.</li>
+          <li><b>🛗 Lift</b>: sleep vanaf de lobby omhoog. Een <b>🪜 trap</b> is goedkoop voor één verdieping.</li>
+          <li><b>💼 Kantoren</b> en <b>🏠 appartementen</b> betalen elke nacht huur. Een rood bordje betekent <i>te huur</i>.</li>
+          <li>Meer mensen geven <b>sterren</b>. Bij ★★ komen <b>🛍️ winkels</b> en <b>🍽️ restaurants</b> erbij, bij ★★★ <b>🛏️ hotelkamers</b>, bij ★★★★ de <b>⚡ expreslift</b>.</li>
+          <li>Winkels en restaurants trekken bezoekers van buiten. Kantoormensen gaan graag lunchen.</li>
+          <li>Het lampje in elke ruimte toont de tevredenheid. Lang wachten op de lift maakt mensen boos, en bij rood vertrekken ze.</li>
+          <li>Het spel wordt vanzelf opgeslagen.</li>
         </ol>
         <p class="keys">
-          Rondkijken: rechtermuisknop slepen, pijltjestoetsen of scrollen. Zoomen: Ctrl + scrollen of + en −.<br />
-          Gereedschap: toetsen 1 t/m 7. Pauze: spatiebalk. Esc: terug naar Bekijken.
+          Rondkijken: rechtermuisknop slepen, pijltjes/WASD of scrollen. Zoomen: Ctrl + scrollen of + en −. Home: camera terug.<br />
+          Gereedschap: 1 t/m 0, E (expreslift), X (slopen). Pauze: spatiebalk. Esc: Bekijken.
         </p>
-        <button id="help-close">Aan de slag</button>
+        <button id="help-close" class="primary">Aan de slag</button>
       </div>
     </div>
 
