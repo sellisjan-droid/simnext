@@ -274,6 +274,18 @@ export class Simulation {
   }
 
   /** Daily rent of an office or apartment: higher floors pay more. */
+  /** Rent minus upkeep that midnight will bring, at the current occupancy. */
+  get dailyBalance(): number {
+    let total = 0;
+    for (const room of this.world.rooms.values()) {
+      const spec = BALANCE.rooms[room.kind];
+      if (room.rented) total += this.rentOf(room);
+      if ('upkeepPerDay' in spec) total -= spec.upkeepPerDay;
+    }
+    for (const s of this.world.shafts.values()) total -= BALANCE.transport[s.kind].upkeepPerDay;
+    return total;
+  }
+
   rentOf(room: Room): number {
     const spec = BALANCE.rooms[room.kind];
     if (!('rentPerDay' in spec)) return 0;
@@ -290,10 +302,14 @@ export class Simulation {
     return a + (b - a) * this.rng();
   }
 
-  private earn(amount: number, room: Room): void {
+  /** Deposits paid by new tenants today, reported together with the rent. */
+  private depositsToday = 0;
+
+  private earn(amount: number, room: Room, show = true): void {
     this.world.money += amount;
     this.salesToday += amount;
     room.earnedToday += amount;
+    if (!show) return;
     this.moneyPops.push({ amount, floor: room.floor, x: this.world.roomCenter(room) });
     if (this.moneyPops.length > 60) this.moneyPops.shift();
     this.cue('cash');
@@ -345,6 +361,8 @@ export class Simulation {
     }
     for (const s of this.world.shafts.values()) upkeep += BALANCE.transport[s.kind].upkeepPerDay;
     this.world.money += rent - upkeep;
+    rent += this.depositsToday;
+    this.depositsToday = 0;
     this.say(this.texts.dayReport({ day: this.day - 1, rent, upkeep, sales: this.salesToday }), rent + this.salesToday >= upkeep ? 'info' : 'bad');
     this.salesToday = 0;
 
@@ -478,6 +496,7 @@ export class Simulation {
   }
 
   private judgeVip(p: Person): void {
+    this.ev.vipId = 0;
     const minutes = this.minutes - (p.tripStart ?? this.minutes);
     if (minutes <= EVENTS.vip.goodTripMinutes) {
       const reward = EVENTS.vip.rewardPerStar * this.stars;
@@ -546,6 +565,14 @@ export class Simulation {
       if (arriveNow) this.addTodo(p, this.minutes + this.rand(5, 60), 'home');
     }
     this.say(this.texts.movedIn(room.kind, room.floor), 'good');
+    // New tenants pay a deposit up front, so building pays off right away.
+    const deposit = this.rentOf(room) * BALANCE.depositDays;
+    if (deposit > 0) {
+      this.world.money += deposit;
+      this.depositsToday += deposit;
+      this.moneyPops.push({ amount: deposit, floor: room.floor, x: this.world.roomCenter(room) });
+      this.cue('cash');
+    }
   }
 
   private moveOut(room: Room): void {
@@ -599,7 +626,7 @@ export class Simulation {
       if (metros.length && this.rng() < metroPerHour / (perHour + metroPerHour)) {
         const m = metros[Math.floor(this.rng() * metros.length)];
         p.startAt = { floor: m.floor, x: m.x + 2 + this.rng() * (m.width - 4) };
-        this.earn(metroSpec.incomePerVisit, m);
+        this.earn(metroSpec.incomePerVisit, m, false);
       }
       // Pick an errand in proportion to what is open.
       p.todo.push({ at: this.minutes, go: this.rng() < this.shareOf('shop', hour) ? 'shop' : 'eat' });

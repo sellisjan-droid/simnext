@@ -5,7 +5,7 @@
 
 export const BALANCE = {
   /** Money the player starts with. */
-  startMoney: 600_000,
+  startMoney: 250_000,
 
   /** Size of the building plot. */
   grid: {
@@ -49,7 +49,7 @@ export const BALANCE = {
       basement: false,
       basementOnly: false,
       /** Rent paid every day at midnight while rented (on the first floor). */
-      rentPerDay: 2_500,
+      rentPerDay: 5_000,
       /** People who work here. */
       people: 6,
     },
@@ -60,7 +60,7 @@ export const BALANCE = {
       ground: false,
       basement: false,
       basementOnly: false,
-      rentPerDay: 2_000,
+      rentPerDay: 4_000,
       people: 3,
     },
     shop: {
@@ -104,9 +104,9 @@ export const BALANCE = {
       ground: false,
       basement: false,
       basementOnly: false,
-      upkeepPerDay: 200,
+      upkeepPerDay: 300,
       /** Paid when a guest checks in. */
-      incomePerNight: 1_100,
+      incomePerNight: 2_200,
       /** Chance per evening that a free, reachable room gets a booking (at full mood). */
       bookingChance: 0.8,
     },
@@ -204,6 +204,9 @@ export const BALANCE = {
     moveOutBelow: 25,
   },
 
+  /** A new tenant pays this many days of rent up front as a deposit. */
+  depositDays: 2,
+
   /** Chance per game hour that a vacant, reachable office or apartment finds a tenant. */
   rentChancePerHour: 0.35,
 
@@ -233,7 +236,7 @@ export const EVENTS = {
     chance: 0.2,
     stars: 2,
     /** The VIP is happy when the whole trip takes at most this many minutes. */
-    goodTripMinutes: 10,
+    goodTripMinutes: 15,
     /** Reward per star when the visit goes well. */
     rewardPerStar: 25_000,
     moodEffect: 8,
