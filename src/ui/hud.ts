@@ -1,6 +1,7 @@
 import { BALANCE } from '../config/balance';
+import { audio } from '../audio/audio';
 import type { GameMessage, Simulation } from '../game/sim';
-import { STAR_TITLES, STAR_UNLOCKS, TOOL_HINTS, TOOL_ICONS, TOOL_NAMES, WEEKDAYS, clock, money } from './strings';
+import { EVENT_CHIPS, STAR_TITLES, STAR_UNLOCKS, TOOL_HINTS, TOOL_ICONS, TOOL_NAMES, WEEKDAYS, clock, money } from './strings';
 
 export type Tool = keyof typeof TOOL_NAMES;
 
@@ -19,6 +20,7 @@ const LAYOUT: (Tool | null)[] = [
   'shop',
   'restaurant',
   'hotel',
+  'metro',
   null,
   'demolish',
 ];
@@ -35,6 +37,7 @@ export const TOOL_KEYS: Partial<Record<string, Tool>> = {
   '9': 'restaurant',
   '0': 'hotel',
   e: 'express',
+  m: 'metro',
   x: 'demolish',
   Delete: 'demolish',
 };
@@ -80,6 +83,7 @@ function toolCost(tool: Tool): string {
     case 'shop':
     case 'restaurant':
     case 'hotel':
+    case 'metro':
       return money(BALANCE.rooms[tool].cost);
     default:
       return '';
@@ -148,6 +152,16 @@ export class Hud {
       const action = (e.target as HTMLElement).closest('button')?.dataset.action;
       if (action === 'help') this.openHelp();
       if (action === 'save') this.onSave();
+      if (action === 'music') {
+        e.stopPropagation();
+        audio.setMusic(!audio.musicOn);
+        this.refreshAudioButtons();
+      }
+      if (action === 'sound') {
+        e.stopPropagation();
+        audio.setSound(!audio.soundOn);
+        this.refreshAudioButtons();
+      }
       if (action === 'new') this.openDialog($('confirm'));
     });
     $('confirm-no').addEventListener('click', () => this.closeDialog($('confirm')));
@@ -164,6 +178,12 @@ export class Hud {
     }
     if (!seen) this.openHelp();
     this.refreshLocks();
+    this.refreshAudioButtons();
+  }
+
+  private refreshAudioButtons(): void {
+    $('music-btn').textContent = `🎵 Muziek: ${audio.musicOn ? 'aan' : 'uit'}`;
+    $('sound-btn').textContent = `${audio.soundOn ? '🔊' : '🔇'} Geluid: ${audio.soundOn ? 'aan' : 'uit'}`;
   }
 
   private speedBeforeDialog = 1;
@@ -281,6 +301,9 @@ export class Hud {
     m.classList.toggle('negative', sim.world.money < 0);
     m.classList.toggle('flash-up', sim.world.money > this.lastMoney && sim.world.money >= 0);
     this.lastMoney = sim.world.money;
+    const daily = sim.dailyBalance;
+    setText('daily', `${daily >= 0 ? '+' : ''}${money(daily)}/dag`);
+    $('daily').classList.toggle('negative', daily < 0);
 
     setText('date', `Dag ${sim.day}, ${WEEKDAYS[(sim.day - 1) % 7]}`);
     const h = sim.hourOfDay;
@@ -302,6 +325,15 @@ export class Hud {
     }
 
     for (const { speed, el } of this.speedButtons) el.classList.toggle('active', speed === sim.speed);
+
+    // Running events as little chips in the top bar.
+    const chips = sim.activeEvents
+      .map((e) => {
+        const until = e.until && e.kind !== 'vip' ? ` tot ${clock((e.until % 1440) / 60)}` : e.kind === 'vip' && e.until ? ` om ${clock((e.until % 1440) / 60)}` : '';
+        return `<span class="chip ${e.kind}">${EVENT_CHIPS[e.kind]}${until}</span>`;
+      })
+      .join('');
+    setText('events', chips, true);
 
     // New simulation messages become toasts.
     const fresh = Math.min(sim.messageCount - this.shownMessages, sim.messages.length);

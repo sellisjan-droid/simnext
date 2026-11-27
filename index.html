@@ -16,15 +16,18 @@
         <div class="rating-text"><span id="star-title"></span><span id="star-next"></span></div>
         <div class="bar"><div id="star-bar"></div></div>
       </div>
-      <div class="stat"><span class="label">Geld</span><span id="money"></span></div>
+      <div class="stat"><span class="label">Geld · <span id="daily" title="Huur min kosten die vannacht binnenkomen"></span></span><span id="money"></span></div>
       <div class="stat"><span class="label" id="date"></span><span id="clock"></span></div>
       <div class="stat"><span class="label">Mensen</span><span id="population"></span></div>
+      <div id="events"></div>
       <div class="spacer"></div>
       <div id="speed"></div>
       <div class="menu-wrap">
         <button id="menu-btn" title="Menu">☰</button>
         <div id="menu" hidden>
           <button data-action="help">❓ Uitleg</button>
+          <button data-action="music" id="music-btn">🎵 Muziek</button>
+          <button data-action="sound" id="sound-btn">🔊 Geluid</button>
           <button data-action="save">💾 Nu opslaan</button>
           <button data-action="new">✨ Nieuw spel</button>
         </div>
@@ -69,11 +72,13 @@
           <li>Meer mensen geven <b>sterren</b>. Bij ★★ komen <b>🛍️ winkels</b> en <b>🍽️ restaurants</b> erbij, bij ★★★ <b>🛏️ hotelkamers</b>, bij ★★★★ de <b>⚡ expreslift</b>.</li>
           <li>Winkels en restaurants trekken bezoekers van buiten. Kantoormensen gaan graag lunchen.</li>
           <li>Het lampje in elke ruimte toont de tevredenheid. Lang wachten op de lift maakt mensen boos, en bij rood vertrekken ze.</li>
-          <li>Het spel wordt vanzelf opgeslagen.</li>
+          <li><b>Kelders</b>: bouw onder de lobby met 🧱 Verdieping. Bij ★★★ kun je er een <b>🚇 metrostation</b> neerzetten: veel bezoekers en een extra ingang.</li>
+          <li><b>Gebeurtenissen</b>: een VIP die je toren keurt, een zakenbeurs, een stroomstoring, of brand. <b>Klik op vuur</b> om de brandweer te bellen!</li>
+          <li>Hoe hoger een kantoor of appartement, hoe meer huur. Het spel wordt vanzelf opgeslagen.</li>
         </ol>
         <p class="keys">
           Rondkijken: rechtermuisknop slepen, pijltjes/WASD of scrollen. Zoomen: Ctrl + scrollen of + en −. Home: camera terug.<br />
-          Gereedschap: 1 t/m 0, E (expreslift), X (slopen). Pauze: spatiebalk. Esc: Bekijken.
+          Gereedschap: 1 t/m 0, E (expreslift), M (metro), X (slopen). Pauze: spatiebalk. Esc: Bekijken. Muziek en geluid: via ☰.
         </p>
         <button id="help-close" class="primary">Aan de slag</button>
       </div>

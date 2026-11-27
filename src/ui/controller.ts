@@ -1,4 +1,5 @@
-import { BALANCE, type RoomKind } from '../config/balance';
+import { audio } from '../audio/audio';
+import { BALANCE, EVENTS, type RoomKind } from '../config/balance';
 import type { Simulation } from '../game/sim';
 import type { Plan } from '../game/world';
 import { CELL_W, FLOOR_H, type Preview, type Renderer } from '../render/renderer';
@@ -8,7 +9,7 @@ import { floorName, money, moodLabel, REASONS, ROOM_NAMES } from './strings';
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 3;
 const KEY_PAN_SPEED = 800; // screen pixels per second
-const ROOM_TOOLS: Tool[] = ['office', 'apartment', 'shop', 'restaurant', 'hotel'];
+const ROOM_TOOLS: Tool[] = ['office', 'apartment', 'shop', 'restaurant', 'hotel', 'metro'];
 
 /** Turns mouse and keyboard input into camera moves and build actions. */
 export class Controller {
@@ -53,8 +54,10 @@ export class Controller {
   setTool(tool: Tool): void {
     if (this.hud.isLocked(tool)) {
       this.hud.toast(`${'★'.repeat(toolStars(tool))} nodig om dit te bouwen`, 'bad');
+      audio.play('error');
       return;
     }
+    if (tool !== this.tool) audio.play('click');
     this.tool = tool;
     this.drag = null;
     this.hud.setTool(tool);
@@ -67,11 +70,12 @@ export class Controller {
     const w = this.sim.world;
     const plotW = w.width * CELL_W;
     const top = Math.max(4, w.topFloor() + 2);
+    const depth = -w.bottomFloor();
     const usableH = window.innerHeight - 260;
-    const zoom = Math.max(0.5, Math.min(2, (window.innerWidth * 0.95) / plotW, usableH / (top * FLOOR_H)));
+    const zoom = Math.max(0.5, Math.min(2, (window.innerWidth * 0.95) / plotW, usableH / ((top + depth) * FLOOR_H)));
     cam.scale.set(zoom);
     cam.x = (window.innerWidth - plotW * zoom) / 2;
-    cam.y = window.innerHeight - 150;
+    cam.y = window.innerHeight - 150 - depth * FLOOR_H * zoom;
   }
 
   /** Called every frame for smooth keyboard panning. */
@@ -93,10 +97,11 @@ export class Controller {
     const z = cam.scale.x;
     const plotW = this.sim.world.width * CELL_W * z;
     const plotH = (this.sim.world.maxFloor + 1) * FLOOR_H * z;
+    const depth = -this.sim.world.minFloor * FLOOR_H * z;
     const w = window.innerWidth;
     const h = window.innerHeight;
     cam.x = Math.min(w * 0.8, Math.max(w * 0.2 - plotW, cam.x));
-    cam.y = Math.min(h * 0.2 + plotH, Math.max(h * 0.45, cam.y));
+    cam.y = Math.min(h * 0.2 + plotH, Math.max(h * 0.45 - depth, cam.y));
   }
 
   private zoomAt(sx: number, sy: number, factor: number): void {
@@ -119,6 +124,16 @@ export class Controller {
 
   private onDown(e: PointerEvent): void {
     this.mouse = { x: e.clientX, y: e.clientY };
+    // A left click on a fire always calls the fire brigade.
+    if (e.button === 0) {
+      const at = this.cellAt(e.clientX, e.clientY);
+      const burning = this.burningAt(at.floor, at.x);
+      if (burning) {
+        this.sim.extinguish(burning);
+        this.refreshHover();
+        return;
+      }
+    }
     const panButton = e.button === 1 || e.button === 2 || (e.button === 0 && this.tool === 'inspect');
     if (panButton) {
       const cam = this.renderer.camera;
@@ -139,7 +154,8 @@ export class Controller {
       case 'apartment':
       case 'shop':
       case 'restaurant':
-      case 'hotel': {
+      case 'hotel':
+      case 'metro': {
         const kind: RoomKind = this.tool;
         const x0 = w.roomLeft(kind, c.x);
         const plan = w.planRoom(kind, c.floor, x0);
@@ -159,7 +175,8 @@ export class Controller {
         if (res.room) this.sim.onRoomRemoved(res.room);
         if (res.shaft) this.sim.onShaftRemoved(res.shaft);
         if (res.stairs) this.sim.onStairsRemoved(res.stairs);
-        if (!res.ok && res.reason) this.hud.toast(REASONS[res.reason], 'bad');
+        if (res.ok) audio.play('demolish');
+        else if (res.reason) this.refuse({ ok: false, cost: 0, reason: res.reason });
         break;
       }
     }
@@ -240,10 +257,18 @@ export class Controller {
 
   private spent(cost: number): void {
     if (cost > 0) this.hud.toast(`Gebouwd voor ${money(cost)}`);
+    audio.play('build');
   }
 
   private refuse(plan: Plan): void {
     if (plan.reason) this.hud.toast(REASONS[plan.reason], 'bad');
+    audio.play('error');
+  }
+
+  private burningAt(floor: number, x: number) {
+    const id = this.sim.world.cell(floor, x)?.occupant;
+    const room = id ? this.sim.world.rooms.get(id) : undefined;
+    return room && room.fire > 0 ? room : undefined;
   }
 
   /** Update the build preview and tooltip for the current mouse position. */
@@ -256,6 +281,12 @@ export class Controller {
     const { x: sx, y: sy } = this.mouse;
     const c = this.cellAt(sx, sy);
     const w = this.sim.world;
+    const burning = this.burningAt(c.floor, c.x);
+    if (burning) {
+      this.preview = { x0: burning.x, x1: burning.x + burning.width, floor0: burning.floor, floor1: burning.floor, ok: true };
+      this.hud.showTooltip(`🔥 Brand! Klik om de brandweer te bellen (${money(EVENTS.fire.extinguishCost)})`, sx, sy, true);
+      return;
+    }
     const show = (preview: Preview | null, plan: Plan | null, info?: string) => {
       this.preview = preview;
       if (plan) {
@@ -332,7 +363,7 @@ export class Controller {
       switch (room.kind) {
         case 'office':
         case 'apartment': {
-          const rent = `Huur ${money(BALANCE.rooms[room.kind].rentPerDay)} per dag`;
+          const rent = `Huur ${money(sim.rentOf(room))} per dag`;
           if (!room.rented) return `${name}\nTe huur. Wacht op een huurder als hij bereikbaar is.\n${rent}`;
           return `${name}\nVerhuurd · ${mood}\n${inside} van ${room.peopleIds.length} mensen binnen\n${rent}`;
         }
@@ -340,6 +371,10 @@ export class Controller {
         case 'restaurant': {
           const spec = BALANCE.rooms[room.kind];
           return `${name}\nOpen ${spec.open[0]}:00 tot ${spec.open[1]}:00 · ${mood}\n${room.visitors} van ${spec.capacity} klanten binnen\nVandaag verdiend: ${money(room.earnedToday)}\nKosten ${money(spec.upkeepPerDay)} per dag`;
+        }
+        case 'metro': {
+          const spec = BALANCE.rooms.metro;
+          return `${name}\nTreinen van ${Math.floor(spec.open[0])}:30 tot 24:00\nVandaag verdiend: ${money(room.earnedToday)}\nKosten ${money(spec.upkeepPerDay)} per dag`;
         }
         case 'hotel':
           return `${name}\n${room.rented ? `Geboekt (${room.peopleIds.length} gast${room.peopleIds.length > 1 ? 'en' : ''})` : 'Vrij vannacht'} · ${mood}\n${money(BALANCE.rooms.hotel.incomePerNight)} per nacht`;
