@@ -27,6 +27,8 @@ export interface Room {
   visitors: number;
   /** Money earned today by this room, for the info tooltip. */
   earnedToday: number;
+  /** Minutes this room has been on fire, 0 when not burning. */
+  fire: number;
 }
 
 export interface Car {
@@ -78,7 +80,10 @@ export type PlanReason =
   | 'notEnoughMoney'
   | 'somethingAbove'
   | 'nothingHere'
-  | 'topFloor';
+  | 'topFloor'
+  | 'basementOnly'
+  | 'notInBasement'
+  | 'somethingBelow';
 
 export interface ShaftPlan extends Plan {
   x: number;
@@ -94,6 +99,8 @@ export type DemolishTarget = 'room' | 'shaft' | 'stairs' | 'base';
 export interface WorldData {
   width: number;
   maxFloor: number;
+  /** Floor of the first row in `bases`; missing in older saves (then 0). */
+  minFloor?: number;
   money: number;
   nextId: number;
   bases: string[];
@@ -112,7 +119,9 @@ const CODE_BASE: Record<string, BaseKind> = { '.': 'none', L: 'lobby', F: 'floor
 export class World {
   readonly width: number;
   readonly maxFloor: number;
-  readonly cells: Cell[][];
+  readonly minFloor: number;
+  /** Rows of cells by floor number; basements use negative keys. */
+  readonly cells: Record<number, Cell[]>;
   readonly rooms = new Map<number, Room>();
   readonly shafts = new Map<number, Shaft>();
   readonly stairs = new Map<number, Stairs>();
@@ -121,16 +130,29 @@ export class World {
   version = 0;
   private nextId = 1;
 
-  constructor(width: number = BALANCE.grid.width, maxFloor: number = BALANCE.grid.maxFloor, money: number = BALANCE.startMoney) {
+  constructor(
+    width: number = BALANCE.grid.width,
+    maxFloor: number = BALANCE.grid.maxFloor,
+    money: number = BALANCE.startMoney,
+    minFloor: number = BALANCE.grid.minFloor,
+  ) {
     this.width = width;
     this.maxFloor = maxFloor;
+    this.minFloor = minFloor;
     this.money = money;
-    this.cells = [];
-    for (let f = 0; f <= maxFloor; f++) {
+    this.cells = {};
+    for (let f = minFloor; f <= maxFloor; f++) {
       const row: Cell[] = [];
       for (let x = 0; x < width; x++) row.push({ base: 'none', occupant: 0 });
-      this.cells.push(row);
+      this.cells[f] = row;
     }
+  }
+
+  /** All floor numbers from the deepest basement to the top. */
+  floors(): number[] {
+    const out: number[] = [];
+    for (let f = this.minFloor; f <= this.maxFloor; f++) out.push(f);
+    return out;
   }
 
   // ---- Save / load ------------------------------------------------------
@@ -141,7 +163,8 @@ export class World {
       maxFloor: this.maxFloor,
       money: this.money,
       nextId: this.nextId,
-      bases: this.cells.map((row) => row.map((c) => BASE_CODE[c.base]).join('')),
+      minFloor: this.minFloor,
+      bases: this.floors().map((f) => this.cells[f].map((c) => BASE_CODE[c.base]).join('')),
       rooms: [...this.rooms.values()],
       shafts: [...this.shafts.values()],
       stairs: [...this.stairs.values()],
@@ -151,10 +174,14 @@ export class World {
   static fromData(d: WorldData): World {
     const w = new World(d.width, d.maxFloor, d.money);
     w.nextId = d.nextId;
-    d.bases.forEach((row, f) => {
+    const first = d.minFloor ?? 0;
+    d.bases.forEach((row, i) => {
+      const f = first + i;
+      if (!w.cells[f]) return;
       for (let x = 0; x < row.length && x < w.width; x++) w.cells[f][x].base = CODE_BASE[row[x]] ?? 'none';
     });
     for (const r of d.rooms) {
+      r.fire ??= 0;
       w.rooms.set(r.id, r);
       for (let x = r.x; x < r.x + r.width; x++) w.cells[r.floor][x].occupant = r.id;
     }
@@ -172,7 +199,7 @@ export class World {
   // ---- Basics -----------------------------------------------------------
 
   inBounds(floor: number, x: number): boolean {
-    return floor >= 0 && floor <= this.maxFloor && x >= 0 && x < this.width;
+    return floor >= this.minFloor && floor <= this.maxFloor && x >= 0 && x < this.width;
   }
 
   cell(floor: number, x: number): Cell | undefined {
@@ -184,9 +211,19 @@ export class World {
     return !!c && c.base !== 'none';
   }
 
-  /** A cell can get a new base if it is on the ground or there is something built right below it. */
+  /**
+   * A cell can get a new base if it is on the ground, rests on something right below it,
+   * or (for basements) hangs under something right above it.
+   */
   isSupported(floor: number, x: number): boolean {
-    return floor === 0 || this.hasBase(floor - 1, x);
+    if (floor === 0) return true;
+    return floor > 0 ? this.hasBase(floor - 1, x) : this.hasBase(floor + 1, x);
+  }
+
+  /** Deepest floor with anything built on it, or 0. */
+  bottomFloor(): number {
+    for (let f = this.minFloor; f < 0; f++) if (this.cells[f].some((c) => c.base !== 'none')) return f;
+    return 0;
   }
 
   /** Highest floor with anything built on it, or -1. */
@@ -196,7 +233,8 @@ export class World {
   }
 
   private baseCost(floor: number): number {
-    return floor === 0 ? BALANCE.lobbyCostPerCell : BALANCE.floorCostPerCell;
+    if (floor === 0) return BALANCE.lobbyCostPerCell;
+    return floor < 0 ? BALANCE.basementCostPerCell : BALANCE.floorCostPerCell;
   }
 
   /** Cost of adding base under [x0, x0+width) on a floor, or a reason why it can't be done. */
@@ -238,7 +276,7 @@ export class World {
   planStrip(kind: 'lobby' | 'floor', floor: number, xa: number, xb: number): Plan {
     if (kind === 'lobby' && floor !== 0) return { ok: false, cost: 0, reason: 'lobbyOnlyGround' };
     if (kind === 'floor' && floor === 0) return { ok: false, cost: 0, reason: 'groundIsLobby' };
-    if (floor < 0 || floor > this.maxFloor) return { ok: false, cost: 0, reason: 'outOfBounds' };
+    if (floor < this.minFloor || floor > this.maxFloor) return { ok: false, cost: 0, reason: 'outOfBounds' };
     const x0 = Math.max(0, Math.min(xa, xb));
     const x1 = Math.min(this.width - 1, Math.max(xa, xb));
     const plan = this.planBase(floor, x0, x1 - x0 + 1);
@@ -271,6 +309,8 @@ export class World {
   planRoom(kind: RoomKind, floor: number, x0: number): Plan {
     const spec = BALANCE.rooms[kind];
     if (floor === 0 && !spec.ground) return { ok: false, cost: 0, reason: 'groundIsLobby' };
+    if (floor >= 0 && spec.basementOnly) return { ok: false, cost: 0, reason: 'basementOnly' };
+    if (floor < 0 && !spec.basement) return { ok: false, cost: 0, reason: 'notInBasement' };
     const blocked = this.freeCells(floor, x0, spec.width);
     if (blocked) return { ok: false, cost: 0, reason: blocked };
     const base = this.planBase(floor, x0, spec.width);
@@ -294,6 +334,7 @@ export class World {
       peopleIds: [],
       visitors: 0,
       earnedToday: 0,
+      fire: 0,
     };
     for (let x = x0; x < x0 + width; x++) this.cells[floor][x].occupant = room.id;
     this.rooms.set(room.id, room);
@@ -351,8 +392,10 @@ export class World {
       top = Math.max(top, existing.top);
     }
     const fail = (reason: PlanReason): ShaftPlan => ({ ok: false, cost: 0, reason, x, bottom, top });
-    if (bottom < 0 || top > this.maxFloor || x < 0 || x + w > this.width) return fail('outOfBounds');
+    if (bottom < this.minFloor || top > this.maxFloor || x < 0 || x + w > this.width) return fail('outOfBounds');
     if (top - bottom < 1) return fail('tooShort');
+    // A shaft needs support at the end nearest the ground, unless it passes through the ground floor.
+    const anchorRow = bottom > 0 ? bottom : top < 0 ? top : null;
 
     let cost = 0;
     for (let f = bottom; f <= top; f++) {
@@ -360,9 +403,8 @@ export class World {
       for (let cx = x; cx < x + w; cx++) {
         const c = this.cells[f][cx];
         if (c.occupant) return fail('occupied');
-        // Only the lowest floor needs support; the shaft carries itself above that.
         if (c.base === 'none') {
-          if (f === bottom && !this.isSupported(f, cx)) return fail('noSupport');
+          if (f === anchorRow && !this.isSupported(f, cx)) return fail('noSupport');
           cost += this.baseCost(f);
         }
       }
@@ -414,7 +456,8 @@ export class World {
       const target: DemolishTarget = this.rooms.has(c.occupant) ? 'room' : this.shafts.has(c.occupant) ? 'shaft' : 'stairs';
       return { ok: true, cost: 0, target, id: c.occupant };
     }
-    if (this.hasBase(floor + 1, x)) return { ok: false, cost: 0, reason: 'somethingAbove' };
+    if (floor >= 0 && this.hasBase(floor + 1, x)) return { ok: false, cost: 0, reason: 'somethingAbove' };
+    if (floor <= 0 && this.hasBase(floor - 1, x)) return { ok: false, cost: 0, reason: 'somethingBelow' };
     return { ok: true, cost: 0, target: 'base' };
   }
 
@@ -487,9 +530,9 @@ export class World {
     return [l, r + 1];
   }
 
-  /** The doors to the street: both ends of every lobby strip. */
-  entrances(): number[] {
-    const out: number[] = [];
+  /** Ways into the building: both ends of every lobby strip, and every metro platform. */
+  entrances(): { floor: number; x: number }[] {
+    const out: { floor: number; x: number }[] = [];
     let x = 0;
     while (x < this.width) {
       if (!this.hasBase(0, x)) {
@@ -497,9 +540,10 @@ export class World {
         continue;
       }
       const [l, r] = this.stripAround(0, x);
-      out.push(l + 0.5, r - 0.5);
+      out.push({ floor: 0, x: l + 0.5 }, { floor: 0, x: r - 0.5 });
       x = r;
     }
+    for (const room of this.rooms.values()) if (room.kind === 'metro') out.push({ floor: room.floor, x: this.roomCenter(room) });
     return out;
   }
 }

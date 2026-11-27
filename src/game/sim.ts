@@ -1,11 +1,11 @@
-import { BALANCE, type RoomKind } from '../config/balance';
+import { BALANCE, EVENTS, type RoomKind } from '../config/balance';
 import { Router, type Leg, type Spot } from './routing';
 import type { Room, Shaft, Stairs } from './world';
 import { World } from './world';
 
 const DAY = 24 * 60;
 
-export type PersonKind = 'worker' | 'resident' | 'guest' | 'visitor';
+export type PersonKind = 'worker' | 'resident' | 'guest' | 'visitor' | 'vip';
 export type PersonState = 'away' | 'walking' | 'waiting' | 'riding' | 'climbing' | 'inside';
 export type Errand = 'home' | 'out' | 'eat' | 'shop';
 
@@ -52,6 +52,10 @@ export interface Person {
   todo: { at: number; go: Errand }[];
   /** Visitors and hotel guests disappear once they leave. */
   transient: boolean;
+  /** Where someone coming from outside enters (e.g. a metro platform); any entrance when unset. */
+  startAt?: Spot;
+  /** When the current trip started, for the VIP's verdict. */
+  tripStart?: number;
   look: Look;
 }
 
@@ -74,6 +78,31 @@ export interface SimTexts {
   movedOut(kind: RoomKind, floor: number): string;
   dayReport(r: DayReport): string;
   newStar(stars: number): string;
+  event(m: EventMessage): string;
+}
+
+/** Things that happen in the tower that the player should hear about. */
+export type EventMessage =
+  | { type: 'vipComing'; hour: number }
+  | { type: 'vipHappy'; reward: number }
+  | { type: 'vipUnhappy'; minutes: number }
+  | { type: 'fireStart'; kind: RoomKind; floor: number }
+  | { type: 'fireOut'; kind: RoomKind; floor: number; cost: number }
+  | { type: 'fireLost'; kind: RoomKind; floor: number }
+  | { type: 'conventionStart' }
+  | { type: 'conventionEnd' }
+  | { type: 'blackoutStart' }
+  | { type: 'blackoutEnd' }
+  | { type: 'broke' };
+
+/** Sounds the simulation asks for; the audio layer plays and empties the list. */
+export type SoundCue = 'cash' | 'ding' | 'star' | 'alarm' | 'event' | 'bad' | 'good' | 'train' | 'moveIn';
+
+/** An event that is running now, for the status chip in the top bar. */
+export interface ActiveEvent {
+  kind: 'vip' | 'fire' | 'convention' | 'blackout';
+  /** Absolute minutes when it ends (or the VIP arrives); 0 when open ended. */
+  until: number;
 }
 
 /** Money popping up somewhere in the tower, for the floating "+ €" effect. */
@@ -90,6 +119,16 @@ export interface SimData {
   visitorDebt: number;
   salesToday: number;
   people: Person[];
+  events?: EventState;
+}
+
+interface EventState {
+  conventionUntil: number;
+  blackoutFrom: number;
+  blackoutUntil: number;
+  vipAt: number;
+  vipId: number;
+  lastTrain: number;
 }
 
 const SKIN = [0xf1c7a0, 0xe0ac7e, 0xc68c5c, 0x9a6640, 0x6e4628];
@@ -99,6 +138,7 @@ const TOPS: Record<PersonKind, number[]> = {
   resident: [0xd9534f, 0x4f81bd, 0x6aa84f, 0xf0a030, 0x8064a2, 0x2aa198],
   guest: [0xffffff, 0xc9b28a, 0x7aa6c2, 0xe6a1a8],
   visitor: [0xe8505b, 0xf9d56e, 0x14b1ab, 0x9b5de5, 0xf15bb5, 0x00bbf9, 0x7bd389],
+  vip: [0xd4af37],
 };
 const BOTTOMS = [0x2c2f3a, 0x3d4a5c, 0x5a4632, 0x22262e, 0x6b7a8f];
 
@@ -117,6 +157,9 @@ export class Simulation {
   messageCount = 0;
   /** Money effects since the renderer last looked; it empties this list. */
   readonly moneyPops: MoneyPop[] = [];
+  /** Sounds since the audio layer last looked; it empties this list. */
+  readonly sounds: SoundCue[] = [];
+  private ev: EventState = { conventionUntil: 0, blackoutFrom: 0, blackoutUntil: 0, vipAt: 0, vipId: 0, lastTrain: 0 };
   minutes: number;
   /** Speed multiplier, 0 means paused. */
   speed = 1;
@@ -141,6 +184,7 @@ export class Simulation {
       this.visitorDebt = data.visitorDebt;
       this.salesToday = data.salesToday;
       for (const p of data.people) this.people.set(p.id, p);
+      if (data.events) this.ev = { ...this.ev, ...data.events };
     }
     this.lastHour = Math.floor(this.minutes / 60);
   }
@@ -153,6 +197,7 @@ export class Simulation {
       visitorDebt: this.visitorDebt,
       salesToday: this.salesToday,
       people: [...this.people.values()],
+      events: { ...this.ev },
     };
   }
 
@@ -207,9 +252,32 @@ export class Simulation {
       this.lastHour = hour;
       this.onHour();
     }
+    this.stepEvents(dt);
     this.spawnVisitors(dt);
     for (const p of [...this.people.values()]) this.stepPerson(p, dt);
-    for (const s of this.world.shafts.values()) this.stepCar(s, dt);
+    if (!this.blackout) for (const s of this.world.shafts.values()) this.stepCar(s, dt);
+  }
+
+  /** True while the power is out and elevators stand still. */
+  get blackout(): boolean {
+    return this.minutes >= this.ev.blackoutFrom && this.minutes < this.ev.blackoutUntil;
+  }
+
+  /** Events running now, for the top bar. */
+  get activeEvents(): ActiveEvent[] {
+    const out: ActiveEvent[] = [];
+    if (this.minutes < this.ev.conventionUntil) out.push({ kind: 'convention', until: this.ev.conventionUntil });
+    if (this.blackout) out.push({ kind: 'blackout', until: this.ev.blackoutUntil });
+    if (this.ev.vipAt || this.ev.vipId) out.push({ kind: 'vip', until: this.ev.vipAt });
+    if ([...this.world.rooms.values()].some((r) => r.fire > 0)) out.push({ kind: 'fire', until: 0 });
+    return out;
+  }
+
+  /** Daily rent of an office or apartment: higher floors pay more. */
+  rentOf(room: Room): number {
+    const spec = BALANCE.rooms[room.kind];
+    if (!('rentPerDay' in spec)) return 0;
+    return Math.round((spec.rentPerDay * (1 + BALANCE.rentBonusPerFloor * Math.max(0, room.floor - 1))) / 10) * 10;
   }
 
   private say(text: string, kind: GameMessage['kind'] = 'info'): void {
@@ -228,6 +296,16 @@ export class Simulation {
     room.earnedToday += amount;
     this.moneyPops.push({ amount, floor: room.floor, x: this.world.roomCenter(room) });
     if (this.moneyPops.length > 60) this.moneyPops.shift();
+    this.cue('cash');
+  }
+
+  private cue(sound: SoundCue): void {
+    if (this.sounds.length < 30) this.sounds.push(sound);
+  }
+
+  private tell(m: EventMessage, kind: GameMessage['kind'] = 'info', sound?: SoundCue): void {
+    this.say(this.texts.event(m), kind);
+    if (sound) this.cue(sound);
   }
 
   // ---- Calendar ---------------------------------------------------------
@@ -243,6 +321,7 @@ export class Simulation {
         if (this.rng() < chance && this.reachableFromStreet(room)) this.bookHotel(room);
       }
     }
+    if (hour === 6) this.rollEvents();
     this.checkStars();
   }
 
@@ -251,6 +330,7 @@ export class Simulation {
     if (next !== null && this.population >= next) {
       this.stars++;
       this.say(this.texts.newStar(this.stars), 'star');
+      this.cue('star');
     }
   }
 
@@ -259,7 +339,7 @@ export class Simulation {
     let upkeep = 0;
     for (const room of this.world.rooms.values()) {
       const spec = BALANCE.rooms[room.kind];
-      if ('rentPerDay' in spec && room.rented) rent += spec.rentPerDay;
+      if ('rentPerDay' in spec && room.rented) rent += this.rentOf(room);
       if ('upkeepPerDay' in spec) upkeep += spec.upkeepPerDay;
       room.earnedToday = 0;
     }
@@ -268,11 +348,149 @@ export class Simulation {
     this.say(this.texts.dayReport({ day: this.day - 1, rent, upkeep, sales: this.salesToday }), rent + this.salesToday >= upkeep ? 'info' : 'bad');
     this.salesToday = 0;
 
+    if (this.world.money < 0) this.tell({ type: 'broke' }, 'bad', 'bad');
     for (const room of [...this.world.rooms.values()]) {
       if ((room.kind === 'office' || room.kind === 'apartment') && room.rented && room.mood < BALANCE.mood.moveOutBelow) this.moveOut(room);
     }
     const dayStart = Math.floor(this.minutes / DAY) * DAY;
     for (const p of this.people.values()) if (!p.transient) this.planDay(p, dayStart);
+  }
+
+  // ---- Events -----------------------------------------------------------
+
+  /** Each morning, maybe start one event for today. */
+  private rollEvents(): void {
+    if (this.day < EVENTS.firstDay) return;
+    const rooms = [...this.world.rooms.values()];
+    const venues = rooms.filter((r) => r.kind === 'restaurant' || r.kind === 'shop' || r.kind === 'hotel');
+    const dayStart = Math.floor(this.minutes / DAY) * DAY;
+    const r = this.rng();
+    let acc = 0;
+    const roll = (chance: number) => r < (acc += chance);
+    if (roll(EVENTS.convention.chance) && this.stars >= EVENTS.convention.stars && venues.length) {
+      this.ev.conventionUntil = dayStart + EVENTS.convention.hours[1] * 60;
+      this.tell({ type: 'conventionStart' }, 'good', 'event');
+    } else if (roll(EVENTS.vip.chance) && this.stars >= EVENTS.vip.stars && venues.length && !this.ev.vipId) {
+      const hour = Math.floor(this.rand(11, 18));
+      this.ev.vipAt = dayStart + hour * 60;
+      this.tell({ type: 'vipComing', hour }, 'info', 'event');
+    } else if (roll(EVENTS.blackout.chance) && this.stars >= EVENTS.blackout.stars && this.world.shafts.size) {
+      this.ev.blackoutFrom = dayStart + this.rand(9, 17) * 60;
+      this.ev.blackoutUntil = this.ev.blackoutFrom + EVENTS.blackout.minutes;
+    } else if (roll(EVENTS.fire.chance) && this.stars >= EVENTS.fire.stars && rooms.length >= EVENTS.fire.minRooms) {
+      const candidates = rooms.filter((x) => x.kind !== 'metro');
+      const target = candidates[Math.floor(this.rng() * candidates.length)];
+      if (target) this.startFire(target);
+    }
+  }
+
+  private wasBlackout = false;
+
+  private stepEvents(dt: number): void {
+    // Convention ends.
+    if (this.ev.conventionUntil && this.minutes >= this.ev.conventionUntil) {
+      this.ev.conventionUntil = 0;
+      this.tell({ type: 'conventionEnd' });
+    }
+    // Power cut starts and ends.
+    const out = this.blackout;
+    if (out !== this.wasBlackout) {
+      this.wasBlackout = out;
+      if (out) this.tell({ type: 'blackoutStart' }, 'bad', 'bad');
+      else this.tell({ type: 'blackoutEnd' }, 'good');
+    }
+    // The VIP arrives.
+    if (this.ev.vipAt && this.minutes >= this.ev.vipAt) {
+      this.ev.vipAt = 0;
+      const vip = this.newPerson('vip', 0, true);
+      this.ev.vipId = vip.id;
+      const options = [...this.world.rooms.values()].filter((r) => (r.kind === 'restaurant' || r.kind === 'shop' || r.kind === 'hotel') && r.fire === 0);
+      // The VIP likes the highest place in the tower.
+      options.sort((a, b) => b.floor - a.floor);
+      if (options[0]) {
+        vip.returnTo = 'out';
+        this.startTrip(vip, options[0], options[0].id);
+      }
+      if (vip.state === 'away') {
+        this.removePerson(vip.id);
+        this.ev.vipId = 0;
+        this.tell({ type: 'vipUnhappy', minutes: 0 }, 'bad', 'bad');
+      }
+    }
+    if (this.ev.vipId && !this.people.has(this.ev.vipId)) this.ev.vipId = 0;
+    // Fires burn, spread and destroy.
+    for (const room of [...this.world.rooms.values()]) {
+      if (room.fire <= 0) continue;
+      const before = room.fire;
+      room.fire += dt;
+      room.mood = Math.max(0, room.mood - dt * 0.1);
+      const every = EVENTS.fire.spreadEvery;
+      if (Math.floor(before / every) !== Math.floor(room.fire / every) && this.rng() < EVENTS.fire.spreadChance) {
+        const next = this.neighbours(room).filter((n) => n.fire === 0);
+        if (next.length) this.startFire(next[Math.floor(this.rng() * next.length)], false);
+      }
+      if (room.fire >= EVENTS.fire.burnMinutes) this.burnDown(room);
+    }
+  }
+
+  /** Rooms next to or right above/below a room. */
+  private neighbours(room: Room): Room[] {
+    const out = new Set<Room>();
+    const w = this.world;
+    for (const [f, x] of [
+      [room.floor, room.x - 1],
+      [room.floor, room.x + room.width],
+      ...Array.from({ length: room.width }, (_, i) => [room.floor + 1, room.x + i]),
+      ...Array.from({ length: room.width }, (_, i) => [room.floor - 1, room.x + i]),
+    ]) {
+      const id = w.cell(f, x)?.occupant;
+      const r = id ? w.rooms.get(id) : undefined;
+      if (r) out.add(r);
+    }
+    return [...out];
+  }
+
+  startFire(room: Room, announce = true): void {
+    room.fire = 0.01;
+    room.mood = Math.max(0, room.mood - 10);
+    if (announce) this.tell({ type: 'fireStart', kind: room.kind, floor: room.floor }, 'bad', 'alarm');
+    else this.cue('alarm');
+    // Everyone inside gets out.
+    for (const p of this.people.values()) {
+      if (p.state === 'inside' && p.atRoom === room.id) this.startTrip(p, null, room.id);
+    }
+  }
+
+  /** Call the fire brigade for a burning room. Returns false if it isn't burning or there's no money. */
+  extinguish(room: Room): boolean {
+    if (room.fire <= 0) return false;
+    const cost = EVENTS.fire.extinguishCost;
+    room.fire = 0;
+    this.world.money -= cost;
+    this.tell({ type: 'fireOut', kind: room.kind, floor: room.floor, cost }, 'good', 'good');
+    return true;
+  }
+
+  private burnDown(room: Room): void {
+    this.tell({ type: 'fireLost', kind: room.kind, floor: room.floor }, 'bad', 'bad');
+    this.world.demolish(room.floor, room.x);
+    this.onRoomRemoved(room);
+  }
+
+  private judgeVip(p: Person): void {
+    const minutes = this.minutes - (p.tripStart ?? this.minutes);
+    if (minutes <= EVENTS.vip.goodTripMinutes) {
+      const reward = EVENTS.vip.rewardPerStar * this.stars;
+      this.world.money += reward;
+      const room = this.world.rooms.get(p.atRoom);
+      if (room) this.moneyPops.push({ amount: reward, floor: room.floor, x: this.world.roomCenter(room) });
+      for (const r of this.world.rooms.values()) r.mood = Math.min(100, r.mood + EVENTS.vip.moodEffect);
+      this.tell({ type: 'vipHappy', reward }, 'good', 'star');
+    } else {
+      for (const r of this.world.rooms.values()) r.mood = Math.max(0, r.mood - EVENTS.vip.moodEffect);
+      this.tell({ type: 'vipUnhappy', minutes: Math.round(minutes) }, 'bad', 'bad');
+    }
+    p.stayUntil = this.minutes + 40;
   }
 
   // ---- Tenants, guests and visitors -------------------------------------
@@ -364,14 +582,38 @@ export class Simulation {
       const rush = room.kind === 'restaurant' ? (hour >= 12 && hour < 14) || (hour >= 18 && hour < 21) ? 1.5 : 0.4 : 1;
       perHour += spec.visitorsPerHour * rush * (0.3 + room.mood / 100);
     }
-    perHour *= BALANCE.visitorBoost[this.stars];
-    this.visitorDebt += (perHour * dt) / 60;
+    // Metro stations bring passengers who come to shop and eat.
+    const metros = [...this.world.rooms.values()].filter((r) => r.kind === 'metro' && r.fire === 0);
+    const metroSpec = BALANCE.rooms.metro;
+    const metroOpen = hour >= metroSpec.open[0] && hour < metroSpec.open[1];
+    const venueHours = perHour > 0;
+    let metroPerHour = metroOpen && venueHours ? metros.length * metroSpec.visitorsPerHour : 0;
+    const boost = BALANCE.visitorBoost[this.stars] * (this.minutes < this.ev.conventionUntil ? EVENTS.convention.boost : 1);
+    perHour *= boost;
+    metroPerHour *= boost;
+    this.visitorDebt += ((perHour + metroPerHour) * dt) / 60;
     while (this.visitorDebt >= 1) {
       this.visitorDebt -= 1;
       const p = this.newPerson('visitor', 0, true);
+      // Some visitors arrive by metro; they enter on the platform and pay a fare.
+      if (metros.length && this.rng() < metroPerHour / (perHour + metroPerHour)) {
+        const m = metros[Math.floor(this.rng() * metros.length)];
+        p.startAt = { floor: m.floor, x: m.x + 2 + this.rng() * (m.width - 4) };
+        this.earn(metroSpec.incomePerVisit, m);
+      }
       // Pick an errand in proportion to what is open.
       p.todo.push({ at: this.minutes, go: this.rng() < this.shareOf('shop', hour) ? 'shop' : 'eat' });
     }
+    // Trains arrive every few minutes (just for show and sound).
+    if (metros.length && metroOpen && this.minutes - this.ev.lastTrain >= metroSpec.trainEvery) {
+      this.ev.lastTrain = this.minutes;
+      this.cue('train');
+    }
+  }
+
+  /** Minutes since the last train arrived, for the metro animation. */
+  get minutesSinceTrain(): number {
+    return this.minutes - this.ev.lastTrain;
   }
 
   /** Share of open shops among open shops and restaurants. */
@@ -443,10 +685,11 @@ export class Simulation {
   /** Is there any way from the street to this room? */
   private reachableFromStreet(room: Room): boolean {
     const target = { floor: room.floor, x: this.world.roomCenter(room) };
-    return this.world.entrances().some((x) => this.router.find({ floor: 0, x }, target) !== null);
+    return this.world.entrances().some((e) => this.router.find(e, target) !== null);
   }
 
   private isOpen(room: Room): boolean {
+    if (room.fire > 0) return false;
     if (room.kind !== 'shop' && room.kind !== 'restaurant') return true;
     const [a, b] = BALANCE.rooms[room.kind].open;
     const h = this.hourOfDay;
@@ -491,7 +734,7 @@ export class Simulation {
       case 'home': {
         if (p.atRoom === p.homeId) return;
         const home = w.rooms.get(p.homeId);
-        if (!home) return;
+        if (!home || home.fire > 0) return;
         this.startTrip(p, home, home.id);
         if (home.kind === 'hotel' && p.state !== 'away') {
           // Guests pay when they check in; one payment per room.
@@ -526,8 +769,8 @@ export class Simulation {
     const entrances = w.entrances();
     const target: Spot | null = room ? { floor: room.floor, x: room.x + 1 + this.rng() * (room.width - 2) } : null;
     let best: { legs: Leg[]; cost: number; start: Spot } | null = null;
-    const starts: Spot[] = p.state === 'away' ? entrances.map((x) => ({ floor: 0, x })) : [this.spotOf(p)];
-    const ends: Spot[] = target ? [target] : entrances.map((x) => ({ floor: 0, x }));
+    const starts: Spot[] = p.state === 'away' ? (p.startAt ? [p.startAt] : entrances) : [this.spotOf(p)];
+    const ends: Spot[] = target ? [target] : entrances;
     for (const start of starts) {
       for (const end of ends) {
         const r = this.router.find(start, end);
@@ -542,6 +785,8 @@ export class Simulation {
       return;
     }
     this.leaveRoom(p);
+    p.startAt = undefined;
+    p.tripStart = this.minutes;
     p.floor = best.start.floor;
     p.x = best.start.x;
     p.tripTo = room ? room.id : 0;
@@ -641,6 +886,7 @@ export class Simulation {
     if (!room) return this.abortTrip(p);
     p.state = 'inside';
     p.atRoom = room.id;
+    if (p.kind === 'vip') this.judgeVip(p);
     if (room.kind === 'shop' || room.kind === 'restaurant') {
       const spec = BALANCE.rooms[room.kind];
       if (room.visitors >= spec.capacity || !this.isOpen(room)) {
@@ -865,5 +1111,6 @@ export class Simulation {
     car.dir = dir;
     car.state = 'doors';
     car.timer = spec.doorMinutes;
+    this.cue('ding');
   }
 }

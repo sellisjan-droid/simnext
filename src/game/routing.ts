@@ -35,7 +35,7 @@ export class Router {
   private readonly world: World;
   private builtVersion = -1;
   private stops: Stop[] = [];
-  private byFloor: number[][] = [];
+  private byFloor: Record<number, number[]> = {};
 
   constructor(world: World) {
     this.world = world;
@@ -44,7 +44,8 @@ export class Router {
   private rebuild(): void {
     const w = this.world;
     this.stops = [];
-    this.byFloor = Array.from({ length: w.maxFloor + 1 }, () => []);
+    this.byFloor = {};
+    for (const f of w.floors()) this.byFloor[f] = [];
     const add = (s: Stop) => {
       this.byFloor[s.floor].push(this.stops.length);
       this.stops.push(s);
