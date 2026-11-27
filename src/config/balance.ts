@@ -164,8 +164,9 @@ export const BALANCE = {
     badTripPenalty: 6,
     /** Penalty when someone cannot reach their goal at all. */
     noRoutePenalty: 12,
-    /** Penalty when a shop or restaurant is full. */
-    fullPenalty: 3,
+    /** Penalty when a shop or restaurant is full, bonus for a good visit. */
+    fullPenalty: 2,
+    goodVisitBonus: 1,
     /** At midnight, a tenant whose mood is below this moves out. */
     moveOutBelow: 25,
   },

@@ -455,11 +455,16 @@ export class Simulation {
 
   /** Pick a shop or restaurant for someone, preferring nearby, happy and not-full ones. */
   private chooseVenue(p: Person, kind: 'shop' | 'restaurant'): Room | undefined {
+    // Count people already on their way, so a crowd doesn't all pick the same place.
+    const incoming = new Map<number, number>();
+    for (const o of this.people.values()) {
+      if (o.tripTo && o.state !== 'inside' && o.state !== 'away') incoming.set(o.tripTo, (incoming.get(o.tripTo) ?? 0) + 1);
+    }
     const options: { room: Room; score: number }[] = [];
     for (const r of this.world.rooms.values()) {
       if (r.kind !== kind || !this.isOpen(r)) continue;
       const cap = BALANCE.rooms[kind].capacity;
-      if (r.visitors >= cap) continue;
+      if (r.visitors + (incoming.get(r.id) ?? 0) >= cap) continue;
       const dist = Math.abs(r.floor - p.floor) * 2 + Math.abs(this.world.roomCenter(r) - p.x) / 10;
       options.push({ room: r, score: r.mood / 20 - dist + this.rng() * 4 });
     }
@@ -648,6 +653,7 @@ export class Simulation {
       room.visitors++;
       p.stayUntil = this.minutes + this.rand(spec.visitMinutes[0], spec.visitMinutes[1]);
       this.earn(spec.incomePerVisit, room);
+      this.adjustMood(room.id, BALANCE.mood.goodVisitBonus);
     }
   }
 
