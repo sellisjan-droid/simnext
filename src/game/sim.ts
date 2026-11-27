@@ -388,7 +388,7 @@ export class Simulation {
     }
     if (car.state === 'idle') {
       this.decide(shaft);
-      if (car.state !== 'moving') return;
+      if ((car.state as string) !== 'moving') return;
     }
     // Moving: travel, checking every floor we pass.
     let budget = BALANCE.elevator.speedFloorsPerMinute * dt;

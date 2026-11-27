@@ -86,7 +86,7 @@ export class World {
   version = 0;
   private nextId = 1;
 
-  constructor(width = BALANCE.grid.width, maxFloor = BALANCE.grid.maxFloor, money: number = BALANCE.startMoney) {
+  constructor(width: number = BALANCE.grid.width, maxFloor: number = BALANCE.grid.maxFloor, money: number = BALANCE.startMoney) {
     this.width = width;
     this.maxFloor = maxFloor;
     this.money = money;
